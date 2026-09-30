@@ -1,0 +1,16 @@
+# Model allowlist (early form of the "model policy" in spec §14).
+#
+# Only provider/model pairs listed here can be constructed by
+# aegisdesk.llm.factory.build_chat_model. Adding a model is a reviewed
+# configuration change, not something an agent or a user can do at runtime.
+version: 1
+providers:
+  anthropic:
+    - claude-haiku-4-5-20251001
+    - claude-sonnet-5-5
+  ollama:
+    # Both support tool calling / structured output in Ollama.
+    - llama3.2
+    - qwen2.5:7b
+  fake:
+    - fake-scripted

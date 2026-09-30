@@ -1,0 +1,9 @@
+[
+  {"ticket_id": "INC-1001", "requester_id": "E1004", "title": "VPN disconnects every few minutes", "description": "GlobalProtect drops the connection roughly every 10 minutes when working from home.", "category": "vpn", "priority": "medium", "status": "open", "created_at": "2026-09-22T08:14:00Z"},
+  {"ticket_id": "INC-1002", "requester_id": "E1004", "title": "External monitor flickers", "description": "Dell U2723QE flickers when connected over USB-C.", "category": "hardware", "priority": "low", "status": "resolved", "created_at": "2026-08-03T13:40:00Z"},
+  {"ticket_id": "INC-1003", "requester_id": "E1001", "title": "GitHub SSO login fails", "description": "Redirect loop when signing in to GitHub Enterprise through SSO.", "category": "access", "priority": "medium", "status": "in_progress", "created_at": "2026-09-25T10:02:00Z"},
+  {"ticket_id": "INC-1004", "requester_id": "E1002", "title": "Salesforce password reset", "description": "Locked out of Salesforce after too many attempts.", "category": "password", "priority": "medium", "status": "resolved", "created_at": "2026-09-10T16:25:00Z"},
+  {"ticket_id": "INC-1005", "requester_id": "E1005", "title": "Install Docker Desktop", "description": "Need Docker Desktop for local development.", "category": "software", "priority": "low", "status": "open", "created_at": "2026-09-27T09:11:00Z"},
+  {"ticket_id": "INC-1006", "requester_id": "E1010", "title": "Laptop battery swelling", "description": "Trackpad is lifting; battery appears swollen.", "category": "hardware", "priority": "high", "status": "open", "created_at": "2026-09-29T07:55:00Z"},
+  {"ticket_id": "INC-1007", "requester_id": "E1012", "title": "Laptop keyboard unresponsive", "description": "Several keys stopped working; laptop sent for repair.", "category": "hardware", "priority": "medium", "status": "in_progress", "created_at": "2026-09-18T11:30:00Z"}
+]

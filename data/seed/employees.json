@@ -1,0 +1,12 @@
+[
+  {"employee_id": "E1001", "name": "Priya Raman", "email": "priya.raman@northstar.example", "department": "engineering", "title": "Software Engineer", "roles": ["employee"], "manager_id": "E1012", "status": "active"},
+  {"employee_id": "E1002", "name": "Marcus Webb", "email": "marcus.webb@northstar.example", "department": "sales", "title": "Account Executive", "roles": ["employee"], "manager_id": "E1011", "status": "active"},
+  {"employee_id": "E1004", "name": "Aisha Khan", "email": "aisha.khan@northstar.example", "department": "finance", "title": "Financial Analyst", "roles": ["employee"], "manager_id": "E1010", "status": "active"},
+  {"employee_id": "E1005", "name": "Tom Becker", "email": "tom.becker@contractor.northstar.example", "department": "engineering", "title": "Contract Developer", "roles": ["contractor"], "manager_id": "E1012", "status": "active"},
+  {"employee_id": "E1006", "name": "Lena Hoffmann", "email": "lena.hoffmann@northstar.example", "department": "it", "title": "IT Administrator", "roles": ["employee", "it_admin"], "manager_id": "E1013", "status": "active"},
+  {"employee_id": "E1007", "name": "Daniel Ortiz", "email": "daniel.ortiz@northstar.example", "department": "finance", "title": "Accounts Payable Clerk", "roles": ["employee"], "manager_id": "E1010", "status": "terminated"},
+  {"employee_id": "E1010", "name": "Grace Liu", "email": "grace.liu@northstar.example", "department": "finance", "title": "Finance Manager", "roles": ["employee", "manager"], "manager_id": null, "status": "active"},
+  {"employee_id": "E1011", "name": "Omar Haddad", "email": "omar.haddad@northstar.example", "department": "sales", "title": "Sales Manager", "roles": ["employee", "manager"], "manager_id": null, "status": "active"},
+  {"employee_id": "E1012", "name": "Sofia Rossi", "email": "sofia.rossi@northstar.example", "department": "engineering", "title": "Engineering Manager", "roles": ["employee", "manager"], "manager_id": null, "status": "active"},
+  {"employee_id": "E1013", "name": "Kenji Watanabe", "email": "kenji.watanabe@northstar.example", "department": "it", "title": "IT Service Manager", "roles": ["employee", "manager", "it_admin"], "manager_id": null, "status": "active"}
+]
