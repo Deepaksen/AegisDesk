@@ -26,7 +26,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -49,6 +49,58 @@ class ToolOutcome:
     content: str
     latency_ms: float
     error_category: str | None = None
+
+
+class ToolRunner(Protocol):
+    """What an agent needs from its tools, wherever they run.
+
+    `ToolExecutor` runs tools in-process (Milestones 1-4); the MCP runner in
+    `tools/clients/mcp.py` runs them on MCP servers (Milestone 5). Agents and
+    graphs depend only on this interface.
+    """
+
+    @property
+    def tool_names(self) -> list[str]: ...
+
+    def model_definitions(self) -> list[dict[str, Any]]: ...
+
+    def execute(
+        self, name: str, args: dict[str, Any], *, user: UserContext, request_id: str
+    ) -> ToolOutcome: ...
+
+
+class CompositeToolRunner:
+    """Several runners behind one interface, e.g. local knowledge tools + remote MCP tools."""
+
+    def __init__(self, runners: Sequence[ToolRunner], *, order: Sequence[str] = ()) -> None:
+        self._by_name: dict[str, ToolRunner] = {}
+        for runner in runners:
+            for name in runner.tool_names:
+                if name in self._by_name:
+                    raise ValueError(f"Duplicate tool name {name!r}")
+                self._by_name[name] = runner
+        rank = {name: i for i, name in enumerate(order)}
+        definitions = [d for r in runners for d in r.model_definitions()]
+        self._definitions = sorted(
+            definitions, key=lambda d: rank.get(d["function"]["name"], len(rank))
+        )
+
+    @property
+    def tool_names(self) -> list[str]:
+        return [d["function"]["name"] for d in self._definitions]
+
+    def model_definitions(self) -> list[dict[str, Any]]:
+        return list(self._definitions)
+
+    def execute(
+        self, name: str, args: dict[str, Any], *, user: UserContext, request_id: str
+    ) -> ToolOutcome:
+        runner = self._by_name.get(name)
+        if runner is None:
+            message = f"There is no tool named {name!r}."
+            content = json.dumps({"error": {"category": "unknown_tool", "message": message}})
+            return ToolOutcome(name, OutcomeStatus.ERROR, content, 0.0, "unknown_tool")
+        return runner.execute(name, args, user=user, request_id=request_id)
 
 
 def idempotency_key(user_id: str, request_id: str, tool_name: str, args: BaseModel) -> str:

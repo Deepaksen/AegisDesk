@@ -9,11 +9,14 @@
     aegisdesk agent --as E1004 --thread T1 "..."   continue a stored thread, even after restart
     aegisdesk agent --as E1004 --engine graph "..." the single Service Desk agent (M2/M3)
     aegisdesk agent --as E1004 --engine loop "..." the Milestone 1 hand-written loop
+    aegisdesk agent --as E1004 --tools mcp_inprocess "..."  enterprise tools over MCP (M5)
     aegisdesk thread T1 --as E1004           show a stored thread
     aegisdesk rag ingest                     build the knowledge-base index
     aegisdesk rag search "vpn drops" --as E1004    inspect retrieved chunks and scores
     aegisdesk ask "How do I configure VPN on macOS?" --as E1004   answer with citations
     aegisdesk eval rag                       retrieval evaluation (recall, MRR, access)
+    aegisdesk mcp serve                      run the read and action MCP servers (HTTP)
+    aegisdesk mcp tools                      MCP discovery: list each server's tools
 
 Every command prints the provider, model, prompt version, token usage and
 latency of each model call, because those are the facts later milestones will
@@ -46,7 +49,13 @@ from aegisdesk.agents.service_desk import (
     build_service_desk_graph_agent,
 )
 from aegisdesk.agents.supervisor import build_supervisor_agent
-from aegisdesk.config import PROJECT_ROOT, Settings, VectorStoreKind, get_settings
+from aegisdesk.config import (
+    PROJECT_ROOT,
+    Settings,
+    ToolTransport,
+    VectorStoreKind,
+    get_settings,
+)
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
 from aegisdesk.graphs.service_desk_graph import (
@@ -60,12 +69,16 @@ from aegisdesk.llm.allowlist import ModelNotAllowedError
 from aegisdesk.llm.client import CallMetadata, LLMClient, StructuredOutputError
 from aegisdesk.llm.factory import ModelConfigurationError, build_chat_model
 from aegisdesk.llm.usage import TokenUsage
+from aegisdesk.mcp_servers.catalogue import McpServerName, build_servers
+from aegisdesk.mcp_servers.server import RISK_META_KEY
 from aegisdesk.persistence.checkpointer import sqlite_checkpointer
 from aegisdesk.prompts.loader import PromptNotFoundError, load_prompt
 from aegisdesk.rag.answer import GroundedAnswerer
 from aegisdesk.rag.factory import build_embedder, build_retriever, build_store
 from aegisdesk.rag.ingestion.pipeline import ingest_directory
 from aegisdesk.schemas.triage import TicketTriage
+from aegisdesk.tools.remote import McpGateway, McpTarget, ToolTransportError
+from aegisdesk.tools.transport import ToolFactory
 
 
 def _client(settings: Settings) -> LLMClient:
@@ -253,10 +266,22 @@ def _run_graph_engine(
     args: argparse.Namespace,
 ) -> int:
     thread_id = args.thread or str(uuid.uuid4())
-    with sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer:
+    if args.tools is not None:
+        settings = settings.model_copy(update={"tool_transport": ToolTransport(args.tools)})
+    if args.engine != "multi" and settings.tool_transport is not ToolTransport.LOCAL:
+        print("Note: MCP tool transport applies to --engine multi; using local tools.")
+        settings = settings.model_copy(update={"tool_transport": ToolTransport.LOCAL})
+    with (
+        sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer,
+        ToolFactory.from_settings(settings, repository) as tool_factory,
+    ):
         agent: ThreadedGraphAgent
         if args.engine == "multi":
-            agent = build_supervisor_agent(settings, repository, checkpointer=checkpointer)
+            if not args.quiet:
+                print(f"Tools: {settings.tool_transport.value}")
+            agent = build_supervisor_agent(
+                settings, repository, checkpointer=checkpointer, tool_factory=tool_factory
+            )
         else:
             agent = build_service_desk_graph_agent(
                 settings, repository, checkpointer=checkpointer, prompt_version=args.prompt_version
@@ -473,6 +498,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--thread", help="thread ID to continue (graph engine); a new one if omitted")
+    p.add_argument(
+        "--tools",
+        choices=[t.value for t in ToolTransport],
+        default=None,
+        help="where enterprise tools run (default TOOL_TRANSPORT); multi engine only",
+    )
 
     rag = sub.add_parser("rag", help="knowledge base: ingest documents, inspect retrieval")
     rag_sub = rag.add_subparsers(dest="rag_command", required=True)
@@ -494,10 +525,67 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dataset", type=Path, default=PROJECT_ROOT / "evals/datasets/rag_v1.yaml")
     p.add_argument("--min-hit-rate", type=float, default=None, help="fail if hit rate is lower")
 
+    mcp = sub.add_parser("mcp", help="MCP servers for the enterprise tools (Milestone 5)")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
+    p = mcp_sub.add_parser("serve", help="serve the read and action MCP servers over HTTP")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
+    p = mcp_sub.add_parser("tools", help="discover the tools each MCP server offers")
+    p.add_argument(
+        "--remote",
+        action="store_true",
+        help="query the HTTP servers (MCP_READ_URL/MCP_ACTION_URL) instead of in-process",
+    )
+
     p = sub.add_parser("thread", help="show a stored conversation thread")
     p.add_argument("thread_id")
     p.add_argument("--as", dest="employee_id", required=True, help="employee ID to sign in as")
     return parser
+
+
+def cmd_mcp(settings: Settings, args: argparse.Namespace) -> int:
+    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    if args.mcp_command == "serve":
+        if settings.mcp_token_secret is None:
+            print("Configuration error: set MCP_TOKEN_SECRET (32+ characters)", file=sys.stderr)
+            return 2
+        import uvicorn
+
+        from aegisdesk.mcp_servers.http import build_http_app
+
+        app = build_http_app(
+            repository, settings.mcp_token_secret.get_secret_value(), host=args.host
+        )
+        print(f"MCP servers: http://{args.host}:{args.port}/read/mcp, /action/mcp")
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        return 0
+
+    # Discovery needs no token: listing tools reveals no user data.
+    targets: dict[McpServerName, McpTarget]
+    if args.remote:
+        targets = {
+            McpServerName.READ: settings.mcp_read_url,
+            McpServerName.ACTION: settings.mcp_action_url,
+        }
+    else:
+        targets = dict(build_servers(repository, "discovery-only-" + "x" * 32))
+    with McpGateway(targets, timeout_seconds=settings.mcp_timeout_seconds) as gateway:
+        for server in McpServerName:
+            try:
+                tools = gateway.list_tools(server)
+            except ToolTransportError as exc:
+                print(f"[{server}] {exc}", file=sys.stderr)
+                return 1
+            print(f"[{server}] audience={server.audience}")
+            for tool in tools:
+                meta = tool.meta or {}
+                hints = tool.annotations
+                flags = [
+                    "read-only" if hints and hints.read_only_hint else "write",
+                    "idempotent" if hints and hints.idempotent_hint else "non-idempotent",
+                ]
+                print(f"  {tool.name:<26} risk={meta.get(RISK_META_KEY)} {', '.join(flags)}")
+    return 0
 
 
 COMMANDS = {
@@ -510,6 +598,7 @@ COMMANDS = {
     "rag": cmd_rag,
     "ask": cmd_ask,
     "eval": cmd_eval,
+    "mcp": cmd_mcp,
 }
 
 

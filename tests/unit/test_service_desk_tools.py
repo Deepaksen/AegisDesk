@@ -43,6 +43,7 @@ def test_tool_catalogue_and_metadata(executor: ToolExecutor) -> None:
         "list_my_tickets",
         "get_ticket",
         "create_ticket",
+        "add_ticket_comment",
     ]
     create = executor.get("create_ticket")
     assert create is not None
@@ -145,3 +146,25 @@ def test_create_ticket_rejects_invalid_arguments(
     assert status is OutcomeStatus.ERROR
     assert body["error"]["category"] == "invalid_arguments"
     assert len(repository.list_tickets_for("E1004")) == 2  # nothing written
+
+
+def test_add_ticket_comment_to_own_ticket_is_idempotent(
+    executor: ToolExecutor, aisha: UserContext, repository: ServiceDeskRepository
+) -> None:
+    args = {"ticket_id": "INC-1001", "comment": "Still dropping after the client update."}
+    status, first = _run(executor, aisha, "add_ticket_comment", args, request_id="req-C")
+    _, retry = _run(executor, aisha, "add_ticket_comment", args, request_id="req-C")
+
+    assert status is OutcomeStatus.OK and first["created"] is True
+    assert retry == {**first, "created": False}
+    assert len(repository.comments_for("INC-1001")) == 1
+
+
+def test_cannot_comment_on_someone_elses_ticket(
+    executor: ToolExecutor, aisha: UserContext, repository: ServiceDeskRepository
+) -> None:
+    status, body = _run(
+        executor, aisha, "add_ticket_comment", {"ticket_id": "INC-1003", "comment": "Hello there"}
+    )
+    assert status is OutcomeStatus.ERROR and body["error"]["category"] == "not_found"
+    assert repository.comments_for("INC-1003") == []

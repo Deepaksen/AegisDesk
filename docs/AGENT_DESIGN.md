@@ -31,7 +31,7 @@ start_turn → call_model ⇄ run_tools (ToolExecutor) → END / limit_reached
 |---|---|---|---|---|---|
 | Supervisor | 0.1.0 | `router@v1` (structured `RoutingPlan`) | none | none | n/a |
 | Knowledge | subgraph | `knowledge@v1` | search_knowledge_base, retrieve_document, request_handoff | none | citations ⊆ chunks retrieved in this run; evidence ⇒ at least one citation |
-| Service Desk | subgraph | `service_desk@v3` | get_my_assets, list_my_tickets, get_ticket, create_ticket, search_knowledge_base, request_handoff | create_ticket (MEDIUM, idempotent) | none yet |
+| Service Desk | subgraph | `service_desk@v3` | get_my_assets, list_my_tickets, get_ticket, create_ticket, add_ticket_comment (M5), search_knowledge_base, request_handoff | create_ticket, add_ticket_comment (MEDIUM, idempotent) | none yet |
 | Access | subgraph | `access@v1` | get_employee_profile, list_my_access, get_application, check_access_eligibility, create_access_request, request_handoff | create_access_request (MEDIUM, idempotent, eligibility recomputed) | none yet |
 
 A single-agent engine (`service_desk@v2`, M2/M3) and the M1 loop are kept for comparison.
@@ -72,3 +72,7 @@ supervisor picks the next pending task
 * one `AgentStep` per task: status (`done` | `incomplete` | `failed`), the answer, and a note (handoffs, citation rejections).
 
 This is the input for traces (M8) and trajectory evaluations (M9).
+
+## Tools over MCP (Milestone 5)
+
+The tool sets above are the per-agent allowlist whichever `TOOL_TRANSPORT` is used. With MCP, enterprise tools execute on the read or action server and each call carries the specialist's `AgentIdentity` in a signed delegation token; knowledge tools and `request_handoff` stay in-process. See [MCP_DESIGN.md](MCP_DESIGN.md).

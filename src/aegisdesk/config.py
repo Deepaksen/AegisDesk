@@ -45,6 +45,16 @@ class VectorStoreKind(StrEnum):
     PGVECTOR = "pgvector"
 
 
+class ToolTransport(StrEnum):
+    # Tools run in the agent's own process (Milestones 1-4).
+    LOCAL = "local"
+    # Enterprise tools behind the two MCP servers, connected in-process.
+    # Full MCP protocol and token checks, no network; tests and demos.
+    MCP_INPROCESS = "mcp_inprocess"
+    # Enterprise tools behind MCP servers over Streamable HTTP (`aegisdesk mcp serve`).
+    MCP_HTTP = "mcp_http"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -87,6 +97,16 @@ class Settings(BaseSettings):
     # Below this cosine similarity a chunk is not treated as evidence.
     # Unset: use the embedder's calibrated default.
     rag_min_score: float | None = Field(default=None, ge=-1.0, le=1.0)
+
+    # Tools over MCP (Milestone 5)
+    tool_transport: ToolTransport = ToolTransport.LOCAL
+    # Signs the delegation tokens the host sends to MCP servers. Required for
+    # mcp_http (host and servers must share it); mcp_inprocess generates a
+    # throwaway key when unset.
+    mcp_token_secret: SecretStr | None = None
+    mcp_read_url: str = "http://127.0.0.1:8765/read/mcp"
+    mcp_action_url: str = "http://127.0.0.1:8765/action/mcp"
+    mcp_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
 
 
 @lru_cache(maxsize=1)

@@ -13,6 +13,7 @@ All data is synthetic.
 | M2 LangGraph ✅ | The same agent as an explicit LangGraph graph: typed state, nodes, conditional edges, SQLite checkpointing (threads survive restarts), per-node streaming, thread ownership | [M2](docs/milestones/M2-langgraph.md) |
 | M3 RAG ✅ | 12-document knowledge base; chunking, embeddings (offline hashing or Ollama), in-memory and PostgreSQL + pgvector stores, access filtering before ranking, grounded answers with verified citations, knowledge tools for the agent, retrieval eval gate | [M3](docs/milestones/M3-rag.md) |
 | M4 Multi-agent ✅ | Supervisor with a structured router and deterministic dispatch; Knowledge, Service Desk and Access specialists as subgraphs with isolated tools and context; bounded handoffs; code-checked citations; access domain with deterministic eligibility (requests recorded, never granted) | [M4](docs/milestones/M4-multi-agent.md) |
+| M5 MCP ✅ | Enterprise tools behind a read and an action MCP server (in-process or Streamable HTTP); per-call signed delegation tokens carry user, agent, request ID and server audience; discovery with risk annotations; timeouts, read-only retries, no write retries; local vs remote comparison | [M5](docs/milestones/M5-mcp.md) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
@@ -37,6 +38,12 @@ uv run aegisdesk thread <id> --as E1004      # read a stored conversation
 uv run aegisdesk agent --as E1004            # interactive session
 uv run aegisdesk agent --as E1004 --engine graph "..."  # the single Service Desk agent (M2/M3)
 uv run aegisdesk agent --as E1004 --engine loop "..."   # the M1 hand-written loop
+
+# Tools over MCP (M5)
+uv run aegisdesk mcp tools                                            # discovery on both servers
+uv run aegisdesk agent --as E1004 --tools mcp_inprocess "What laptop is assigned to me?"
+MCP_TOKEN_SECRET=<32+ chars> uv run aegisdesk mcp serve               # HTTP: :8765/read/mcp, /action/mcp
+MCP_TOKEN_SECRET=<same> TOOL_TRANSPORT=mcp_http uv run aegisdesk agent --as E1004 "..."
 
 # Knowledge base (RAG)
 uv run aegisdesk rag search "my vpn keeps disconnecting" --as E1004   # inspect chunks and scores

@@ -4,10 +4,14 @@ Tool isolation is decided here, in one place:
 
     knowledge    : search_knowledge_base, retrieve_document, request_handoff
     service_desk : get_my_assets, list_my_tickets, get_ticket, create_ticket,
-                   search_knowledge_base (read-only, for troubleshooting), request_handoff
+                   add_ticket_comment, search_knowledge_base (read-only, for
+                   troubleshooting), request_handoff
     access       : get_employee_profile, list_my_access, get_application,
                    check_access_eligibility, create_access_request, request_handoff
     supervisor   : none
+
+From Milestone 5 the enterprise tools can run behind MCP servers
+(`TOOL_TRANSPORT`); the lists above stay the allowlist either way.
 """
 
 from __future__ import annotations
@@ -28,16 +32,17 @@ from aegisdesk.graphs.supervisor_graph import (
     build_supervisor_graph,
     supervisor_recursion_limit,
 )
+from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.llm.factory import build_chat_model
 from aegisdesk.prompts.loader import load_prompt
 from aegisdesk.rag.factory import build_retriever
 from aegisdesk.rag.retrieval.retriever import Retriever
 from aegisdesk.tools.access import build_access_tools
 from aegisdesk.tools.base import ToolSpec
-from aegisdesk.tools.executor import ToolExecutor
 from aegisdesk.tools.handoff import AgentName, build_handoff_tool
 from aegisdesk.tools.knowledge import build_knowledge_tools
 from aegisdesk.tools.service_desk import build_service_desk_tools
+from aegisdesk.tools.transport import ToolFactory
 
 SUPERVISOR_NAME = "supervisor"
 SUPERVISOR_VERSION = "0.1.0"
@@ -65,6 +70,16 @@ def specialist_tools(
     }
 
 
+def specialist_identity(agent: AgentName, settings: Settings) -> AgentIdentity:
+    """The agent identity carried in every MCP delegation token this specialist uses."""
+    return AgentIdentity(
+        agent_id=agent.value,
+        agent_version=SUPERVISOR_VERSION,
+        agent_type="specialist",
+        environment=settings.aegis_env.value,
+    )
+
+
 def build_supervisor_agent(
     settings: Settings,
     repository: ServiceDeskRepository,
@@ -72,13 +87,19 @@ def build_supervisor_agent(
     checkpointer: BaseCheckpointSaver[Any],
     model: BaseChatModel | None = None,
     retriever: Retriever | None = None,
+    tool_factory: ToolFactory | None = None,
 ) -> ThreadedGraphAgent:
+    """`tool_factory` decides where enterprise tools run (local by default).
+
+    The caller owns the factory and closes it when done with the agent.
+    """
     model = model if model is not None else build_chat_model(settings)
     retriever = retriever or build_retriever(settings)
     agent_limits = AgentLimits(
         max_steps=settings.agent_max_steps, max_tool_calls=settings.agent_max_tool_calls
     )
     tools = specialist_tools(repository, retriever)
+    tool_factory = tool_factory or ToolFactory()
 
     specialists = {}
     for agent, (prompt_name, version) in PROMPTS.items():
@@ -87,7 +108,7 @@ def build_supervisor_agent(
             graph=build_tool_agent_graph(
                 model=model,
                 prompt=load_prompt(settings.prompts_dir, prompt_name, version),
-                executor=ToolExecutor(tools[agent]),
+                executor=tool_factory.runner(specialist_identity(agent, settings), tools[agent]),
                 limits=agent_limits,
                 checkpointer=False,  # the parent thread stores only what specialists return
             ),

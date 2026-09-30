@@ -95,7 +95,7 @@ def test_tool_isolation_per_agent(repository: ServiceDeskRepository, retriever: 
         "search_knowledge_base", "retrieve_document", "request_handoff",
     }  # fmt: skip
     assert tools[AgentName.SERVICE_DESK] == {
-        "get_my_assets", "list_my_tickets", "get_ticket", "create_ticket",
+        "get_my_assets", "list_my_tickets", "get_ticket", "create_ticket", "add_ticket_comment",
         "search_knowledge_base", "request_handoff",
     }  # fmt: skip
     assert tools[AgentName.ACCESS] == {

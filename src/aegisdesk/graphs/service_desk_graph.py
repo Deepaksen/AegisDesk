@@ -52,7 +52,7 @@ from aegisdesk.graphs.state import ServiceDeskState, claims_from, context_from
 from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.usage import TokenUsage
 from aegisdesk.prompts.loader import Prompt
-from aegisdesk.tools.executor import OutcomeStatus, ToolExecutor
+from aegisdesk.tools.executor import OutcomeStatus, ToolRunner
 
 NODE_START = "start_turn"
 NODE_MODEL = "call_model"
@@ -71,7 +71,7 @@ def build_tool_agent_graph(
     *,
     model: BaseChatModel,
     prompt: Prompt,
-    executor: ToolExecutor,
+    executor: ToolRunner,
     limits: AgentLimits,
     checkpointer: BaseCheckpointSaver[Any] | bool | None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
@@ -314,7 +314,7 @@ class ServiceDeskGraphAgent(ThreadedGraphAgent):
         version: str,
         model: BaseChatModel,
         prompt: Prompt,
-        executor: ToolExecutor,
+        executor: ToolRunner,
         limits: AgentLimits,
         checkpointer: BaseCheckpointSaver[Any],
     ) -> None:

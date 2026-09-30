@@ -25,6 +25,7 @@ from aegisdesk.domain.models import (
     Employee,
     Ticket,
     TicketCategory,
+    TicketComment,
     TicketPriority,
     TicketStatus,
 )
@@ -51,6 +52,8 @@ class ServiceDeskRepository:
         # idempotency key -> record id, so a repeated write returns the first result.
         self._ticket_idempotency: dict[str, str] = {}
         self._request_idempotency: dict[str, str] = {}
+        self._comments: dict[str, TicketComment] = {}
+        self._comment_idempotency: dict[str, str] = {}
 
     @classmethod
     def from_seed(
@@ -125,6 +128,26 @@ class ServiceDeskRepository:
         self._tickets[ticket.ticket_id] = ticket
         self._ticket_idempotency[idempotency_key] = ticket.ticket_id
         return ticket, True
+
+    def comments_for(self, ticket_id: str) -> list[TicketComment]:
+        return [c for c in self._comments.values() if c.ticket_id == ticket_id]
+
+    def add_ticket_comment(
+        self, *, ticket_id: str, author_id: str, body: str, idempotency_key: str
+    ) -> tuple[TicketComment, bool]:
+        existing_id = self._comment_idempotency.get(idempotency_key)
+        if existing_id is not None:
+            return self._comments[existing_id], False
+        comment = TicketComment(
+            comment_id=f"CMT-{len(self._comments) + 1:04d}",
+            ticket_id=ticket_id,
+            author_id=author_id,
+            body=body,
+            created_at=datetime.now(UTC),
+        )
+        self._comments[comment.comment_id] = comment
+        self._comment_idempotency[idempotency_key] = comment.comment_id
+        return comment, True
 
     def _next_ticket_id(self) -> str:
         highest = max((int(t.split("-")[1]) for t in self._tickets), default=1000)

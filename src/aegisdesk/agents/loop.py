@@ -39,7 +39,7 @@ from langchain_core.messages.tool import ToolCall
 from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.usage import TokenUsage
 from aegisdesk.prompts.loader import Prompt
-from aegisdesk.tools.executor import OutcomeStatus, ToolExecutor
+from aegisdesk.tools.executor import OutcomeStatus, ToolRunner
 
 STEP_LIMIT_ANSWER = (
     "I couldn't finish this request within the allowed number of steps. "
@@ -150,7 +150,7 @@ class ToolCallingAgent:
         version: str,
         model: BaseChatModel,
         prompt: Prompt,
-        executor: ToolExecutor,
+        executor: ToolRunner,
         limits: AgentLimits,
     ) -> None:
         self.name = name

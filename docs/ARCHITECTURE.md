@@ -9,7 +9,7 @@ This document describes the **target** architecture and marks what has been buil
 | M2 LangGraph | ✅ built ([notes](milestones/M2-langgraph.md)) |
 | M3 RAG | ✅ built ([notes](milestones/M3-rag.md), [design](RAG_DESIGN.md)) |
 | M4 Multi-agent | ✅ built ([notes](milestones/M4-multi-agent.md), [design](AGENT_DESIGN.md)) |
-| M5 MCP | not started |
+| M5 MCP | ✅ built ([notes](milestones/M5-mcp.md), [design](MCP_DESIGN.md)) |
 | M6 Governance | not started |
 | M7 Human approval | not started |
 | M8 Observability | not started |
@@ -57,7 +57,24 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M4
+## What exists after M5
+
+### MCP interactions
+
+```
+ Host process (CLI)                                         MCP servers (in-process or `aegisdesk mcp serve`)
+ ─────────────────                                          ────────────────────────────────────────────────
+ specialist agent ── ToolRunner ──┬─ local ToolExecutor     knowledge search/retrieve, request_handoff
+   (AgentIdentity)                │
+                                  ├─ RemoteToolRunner ─ tools/call + _meta{JWT aud=read}   ─► aegisdesk-read
+                                  │    allowlist · token per call · timeout · 1 retry          verify token → ToolExecutor
+                                  └─ RemoteToolRunner ─ tools/call + _meta{JWT aud=action} ─► aegisdesk-action
+                                       allowlist · token per call · timeout · no retry         verify token → ToolExecutor
+```
+
+* **MCP** (`src/aegisdesk/mcp_servers/`, `tools/remote.py`, `tools/transport.py`, `identity/tokens.py`): enterprise tools behind a read server and an action server. Each call carries a short-lived signed delegation token (user claims, RFC 8693 `act` agent claim, request ID, server audience). Servers trust only the token. `TOOL_TRANSPORT` chooses `local`, `mcp_inprocess` or `mcp_http`; agents do not change. See [MCP_DESIGN.md](MCP_DESIGN.md) and [ADR 0008](adr/0008-mcp-servers-with-delegation-tokens.md).
+
+From M4:
 
 ### Multi-agent topology (default engine)
 
@@ -74,7 +91,7 @@ start_turn → classify_request ──(LLM: RoutingPlan{tasks, out_of_scope})─
    handoff                   create_ticket, search,        eligibility, create_access_request,
    + citation check (code)   handoff                       handoff (eligibility recomputed)
           │                         │                            │
-          └──── each: its own prompt, its own ToolExecutor, its own state ─────┘
+          └──── each: its own prompt, its own ToolRunner, its own state ───────┘
                                    │
                               respond (1 answer → as is; several → sections joined by code)
 ```
@@ -161,7 +178,7 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `data/seed/` | `data/seed/` | M1 |
 | `graphs/`, `agents/` | `src/aegisdesk/graphs/`, `src/aegisdesk/agents/` | M1–M2; supervisor + specialists M4 |
 | `rag/` | `src/aegisdesk/rag/`; documents in `data/documents/` | M3 |
-| `mcp_servers/` | `src/aegisdesk/mcp_servers/` | M5 |
+| `mcp_servers/` | `src/aegisdesk/mcp_servers/`; client side in `src/aegisdesk/tools/remote.py` | M5 |
 | `governance/` | `src/aegisdesk/governance/` | M6 |
 | `persistence/` | `src/aegisdesk/persistence/` (checkpointer) | M2 |
 | `migrations/` | `migrations/` (Alembic), `alembic.ini` | M3 |
@@ -172,7 +189,7 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 
 ## Diagrams still to come
 
-Written as each milestone lands: MCP interactions (M5), the full security boundary (M6; its first version is described above), approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
+Written as each milestone lands: the full security boundary (M6; its first version is described above), approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
 
 ## Decisions
 
