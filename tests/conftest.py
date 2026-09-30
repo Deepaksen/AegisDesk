@@ -5,6 +5,8 @@ from collections.abc import Iterator
 import pytest
 
 from aegisdesk.config import PROJECT_ROOT, Settings, get_settings
+from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.identity.context import UserContext, authenticate
 from aegisdesk.prompts.loader import Prompt, load_prompt
 
 # Env vars that would otherwise leak from a developer's shell or .env into tests.
@@ -18,6 +20,8 @@ _MODEL_ENV_VARS = (
     "MODEL_MAX_RETRIES",
     "ANTHROPIC_API_KEY",
     "OLLAMA_BASE_URL",
+    "AGENT_MAX_STEPS",
+    "AGENT_MAX_TOOL_CALLS",
 )
 
 
@@ -41,3 +45,15 @@ def triage_prompt() -> Prompt:
 @pytest.fixture
 def assistant_prompt() -> Prompt:
     return load_prompt(PROJECT_ROOT / "prompts", "assistant", "v1")
+
+
+@pytest.fixture
+def repository() -> ServiceDeskRepository:
+    """A fresh in-memory repository per test, so writes never leak between tests."""
+    return ServiceDeskRepository.from_seed(PROJECT_ROOT / "data" / "seed")
+
+
+@pytest.fixture
+def aisha(repository: ServiceDeskRepository) -> UserContext:
+    """E1004, a finance employee (the spec's example user)."""
+    return authenticate(repository, "E1004")

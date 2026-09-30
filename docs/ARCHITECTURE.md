@@ -5,7 +5,7 @@ This document describes the **target** architecture and marks what has been buil
 | Milestone | Status |
 |---|---|
 | M0 LLM fundamentals | ✅ built ([notes](milestones/M0-llm-fundamentals.md)) |
-| M1 Single agent + local tools | not started |
+| M1 Single agent + local tools | ✅ built ([notes](milestones/M1-single-agent-tools.md)) |
 | M2 LangGraph | not started |
 | M3 RAG | not started |
 | M4 Multi-agent | not started |
@@ -57,14 +57,29 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M0
+## What exists after M1
 
 ```
-aegisdesk CLI ──► LLMClient ──► BaseChatModel ◄── build_chat_model(Settings, allowlist)
-                     │                              ├── ChatAnthropic   (hosted)
-       prompts/<name>/vN.yaml                       ├── ChatOllama      (local)
-                                                    └── ScriptedChatModel (offline fake, tests)
+aegisdesk agent --as E1004 "..."
+      │
+      ├─► authenticate() ─────────────► UserContext (trusted, built before the model runs)
+      │                                       │
+      ▼                                       ▼
+ToolCallingAgent (hand-written loop) ──► ToolExecutor ──► Service Desk tools ──► in-memory repository
+      │   limits: max steps, max tool calls    lookup · validate · trusted context ·       (data/seed/*.json)
+      │   records: trajectory, usage           idempotency key · error shaping
+      ▼
+BaseChatModel.bind_tools(...) ◄── build_chat_model(Settings, allowlist)
+                                    ├── ChatAnthropic   (hosted)
+prompts/service_desk/v1.yaml        ├── ChatOllama      (local)
+                                    └── ScriptedChatModel (offline fake, tests)
 ```
+
+* **Agent loop** (`src/aegisdesk/agents/loop.py`): the model proposes tool calls, and the application validates and executes them, feeds the results back, and stops at a final answer or a hard limit. Every run returns its trajectory, token usage and request ID.
+* **Tools** (`src/aegisdesk/tools/`): Pydantic input and output schemas, plus risk, read/write, idempotency and owner metadata. Model-facing schemas contain **no identity parameters**, because the user comes from `UserContext` ([ADR 0003](adr/0003-tools-take-identity-from-trusted-context.md)).
+* **Security boundary, first version:** tool allowlist per agent, strict argument validation, ownership checks, idempotent writes, error shaping and loop limits. It is enforced in code and tested with a scripted malicious model (`tests/security/`). M6 moves the per-tool checks into a central gateway with OPA.
+
+From M0:
 
 * **Model layer** (`src/aegisdesk/llm/`): the only code that knows about providers. Everything above it depends on `BaseChatModel` and `LLMClient`. See [ADR 0002](adr/0002-provider-agnostic-model-layer.md).
 * **Model policy:** `config/models.yaml` allowlist, enforced at construction.
@@ -80,10 +95,12 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `prompts/` | `prompts/` (data), `src/aegisdesk/prompts/` (loader) | M0 |
 | model abstraction | `src/aegisdesk/llm/` | M0 |
 | `tools/` | `src/aegisdesk/tools/` | M1 |
+| `identity/` | `src/aegisdesk/identity/` (simulated login; OIDC later) | M1 |
+| `data/seed/` | `data/seed/` | M1 |
 | `graphs/`, `agents/` | `src/aegisdesk/graphs/`, `src/aegisdesk/agents/` | M2 / M4 |
 | `rag/` | `src/aegisdesk/rag/` | M3 |
 | `mcp_servers/` | `src/aegisdesk/mcp_servers/` | M5 |
-| `governance/`, `identity/` | `src/aegisdesk/governance/`, `src/aegisdesk/identity/` | M6 |
+| `governance/` | `src/aegisdesk/governance/` | M6 |
 | `approvals/`, `persistence/`, `migrations/` | … | M7 |
 | `observability/`, `infrastructure/` | … | M8 |
 | `evals/` | `evals/` | M9 |
@@ -91,7 +108,7 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 
 ## Diagrams still to come
 
-Written as each milestone lands: LangGraph topology (M2), RAG pipeline (M3), MCP interactions (M5), security boundary (M6), approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
+Written as each milestone lands: LangGraph topology (M2), RAG pipeline (M3), MCP interactions (M5), the full security boundary (M6; its first version is described above), approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
 
 ## Decisions
 

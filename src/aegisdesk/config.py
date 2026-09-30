@@ -55,8 +55,13 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     ollama_base_url: str = "http://localhost:11434"
 
+    # Hard limits on one agent request, so a confused model cannot loop forever.
+    agent_max_steps: int = Field(default=6, ge=1, le=20)
+    agent_max_tool_calls: int = Field(default=8, ge=0, le=50)
+
     models_allowlist_path: Path = PROJECT_ROOT / "config" / "models.yaml"
     prompts_dir: Path = PROJECT_ROOT / "prompts"
+    seed_data_dir: Path = PROJECT_ROOT / "data" / "seed"
 
 
 @lru_cache(maxsize=1)

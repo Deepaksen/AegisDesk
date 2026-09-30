@@ -46,3 +46,33 @@ def test_configuration_errors_exit_cleanly(
     monkeypatch.setenv("MODEL_NAME", "not-allowlisted")
     assert main(["chat", "hi"]) == 2
     assert "not allowlisted" in capsys.readouterr().err
+
+
+def test_agent_single_request_prints_trajectory_and_answer(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["agent", "--as", "E1004", "What laptop is assigned to me?"]) == 0
+
+    out = capsys.readouterr().out
+    assert "tool   get_my_assets({}) ok" in out
+    assert "Assistant: [fake model] Tool results:" in out
+    assert "NS-LT-0101" in out
+    assert "stop=final_answer llm_calls=2 tool_calls=1" in out
+
+
+def test_agent_refuses_terminated_employee(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["agent", "--as", "E1007", "hi"]) == 2
+    assert "not active" in capsys.readouterr().err
+
+
+def test_agent_interactive_session_keeps_state_between_turns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    turns = iter(["Create a ticket: my VPN keeps dropping", "What tickets do I have open?", "exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(turns))
+
+    assert main(["agent", "--as", "E1004", "--quiet"]) == 0
+
+    out = capsys.readouterr().out
+    # The ticket created in turn 1 is listed in turn 2.
+    assert out.count("INC-1008") >= 2

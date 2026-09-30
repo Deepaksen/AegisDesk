@@ -6,9 +6,12 @@ All data is synthetic.
 
 ## Status
 
-**Milestone 0, LLM fundamentals, is complete:** a provider-agnostic model layer (Anthropic, local Ollama, or an offline fake), plain chat, structured output, versioned prompts, and token and latency measurement.
+| Milestone | What it adds | Notes |
+|---|---|---|
+| M0 LLM fundamentals ✅ | Provider-agnostic model layer (Anthropic, local Ollama, offline fake), chat, structured output, versioned prompts, token and latency measurement | [M0](docs/milestones/M0-llm-fundamentals.md) |
+| M1 Single agent + tools ✅ | Service Desk agent with a hand-written tool-calling loop; tools for own assets and tickets and for ticket creation; trusted identity; idempotent writes; security tests | [M1](docs/milestones/M1-single-agent-tools.md) |
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress, and [`docs/milestones/M0-llm-fundamentals.md`](docs/milestones/M0-llm-fundamentals.md) for what M0 teaches.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
 ## Quick start
 
@@ -22,7 +25,13 @@ uv run aegisdesk config
 uv run aegisdesk chat "How do I clear my DNS cache?"
 uv run aegisdesk triage "My VPN drops every 10 minutes" --show-messages
 uv run aegisdesk repeat "Suggest a name for a new laptop" --runs 5 --temperature 1.0
+
+# Service Desk agent (simulated login as a synthetic employee)
+uv run aegisdesk agent --as E1004 "What laptop is assigned to me?"
+uv run aegisdesk agent --as E1004            # interactive session
 ```
+
+Synthetic users include `E1004` (finance), `E1001` (engineering), `E1005` (contractor), `E1006` (IT admin), `E1010` (manager) and `E1007` (terminated, so login is refused). See [`data/seed/`](data/seed/).
 
 ### Choosing a model
 
@@ -34,7 +43,7 @@ Set these in `.env` or your shell. Models must be listed in [`config/models.yaml
 | Anthropic | `MODEL_PROVIDER=anthropic` `MODEL_NAME=claude-haiku-4-5-20251001` (or `claude-sonnet-5-5`) `ANTHROPIC_API_KEY=…` |
 | Ollama (local) | `ollama pull llama3.2`, then `MODEL_PROVIDER=ollama` `MODEL_NAME=llama3.2` (or `qwen2.5:7b`) |
 
-Also available: `MODEL_TEMPERATURE`, `MODEL_MAX_TOKENS`, `MODEL_TIMEOUT_SECONDS`, `MODEL_MAX_RETRIES`, `OLLAMA_BASE_URL`.
+Also available: `MODEL_TEMPERATURE`, `MODEL_MAX_TOKENS`, `MODEL_TIMEOUT_SECONDS`, `MODEL_MAX_RETRIES`, `OLLAMA_BASE_URL`, `AGENT_MAX_STEPS`, `AGENT_MAX_TOOL_CALLS`.
 
 ## Development
 

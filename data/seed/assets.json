@@ -1,0 +1,14 @@
+[
+  {"asset_tag": "NS-LT-0101", "asset_type": "laptop", "model": "Dell Latitude 7440", "serial_number": "DL7440-58213", "status": "in_use", "assigned_to": "E1004", "assigned_on": "2025-03-12"},
+  {"asset_tag": "NS-MN-0102", "asset_type": "monitor", "model": "Dell U2723QE", "serial_number": "DU27-11873", "status": "in_use", "assigned_to": "E1004", "assigned_on": "2025-03-12"},
+  {"asset_tag": "NS-LT-0103", "asset_type": "laptop", "model": "Apple MacBook Pro 14 (M3)", "serial_number": "MBP14-90331", "status": "in_use", "assigned_to": "E1001", "assigned_on": "2024-11-04"},
+  {"asset_tag": "NS-PH-0104", "asset_type": "phone", "model": "Apple iPhone 15", "serial_number": "IP15-44012", "status": "in_use", "assigned_to": "E1001", "assigned_on": "2024-11-04"},
+  {"asset_tag": "NS-LT-0105", "asset_type": "laptop", "model": "Lenovo ThinkPad T14 Gen 4", "serial_number": "LT14-66120", "status": "in_use", "assigned_to": "E1002", "assigned_on": "2025-01-20"},
+  {"asset_tag": "NS-LT-0106", "asset_type": "laptop", "model": "Lenovo ThinkPad T14 Gen 4", "serial_number": "LT14-66187", "status": "in_use", "assigned_to": "E1005", "assigned_on": "2026-02-02"},
+  {"asset_tag": "NS-LT-0107", "asset_type": "laptop", "model": "Dell Precision 5680", "serial_number": "DP5680-20488", "status": "in_use", "assigned_to": "E1006", "assigned_on": "2024-06-17"},
+  {"asset_tag": "NS-DS-0108", "asset_type": "docking_station", "model": "Dell WD22TB4", "serial_number": "WD22-73001", "status": "in_use", "assigned_to": "E1006", "assigned_on": "2024-06-17"},
+  {"asset_tag": "NS-LT-0109", "asset_type": "laptop", "model": "Apple MacBook Air 13 (M2)", "serial_number": "MBA13-31574", "status": "in_use", "assigned_to": "E1010", "assigned_on": "2023-09-01"},
+  {"asset_tag": "NS-LT-0110", "asset_type": "laptop", "model": "Dell Latitude 7440", "serial_number": "DL7440-58877", "status": "retrieval_pending", "assigned_to": "E1007", "assigned_on": "2024-02-15"},
+  {"asset_tag": "NS-LT-0111", "asset_type": "laptop", "model": "Lenovo ThinkPad X1 Carbon Gen 12", "serial_number": "X1C12-10442", "status": "in_repair", "assigned_to": "E1012", "assigned_on": "2025-07-08"},
+  {"asset_tag": "NS-LT-0112", "asset_type": "laptop", "model": "Dell Latitude 7440", "serial_number": "DL7440-59002", "status": "in_stock", "assigned_to": null, "assigned_on": null}
+]
