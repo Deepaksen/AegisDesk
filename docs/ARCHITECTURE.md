@@ -7,7 +7,7 @@ This document describes the **target** architecture and marks what has been buil
 | M0 LLM fundamentals | ✅ built ([notes](milestones/M0-llm-fundamentals.md)) |
 | M1 Single agent + local tools | ✅ built ([notes](milestones/M1-single-agent-tools.md)) |
 | M2 LangGraph | ✅ built ([notes](milestones/M2-langgraph.md)) |
-| M3 RAG | not started |
+| M3 RAG | ✅ built ([notes](milestones/M3-rag.md), [design](RAG_DESIGN.md)) |
 | M4 Multi-agent | not started |
 | M5 MCP | not started |
 | M6 Governance | not started |
@@ -57,7 +57,7 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M2
+## What exists after M3
 
 ```
 aegisdesk agent --as E1004 --thread T "..."
@@ -66,18 +66,33 @@ aegisdesk agent --as E1004 --thread T "..."
       │                                       │
       ├─► thread ownership check (before anything is written)
       ▼                                       ▼
-ServiceDeskGraphAgent (LangGraph) ──────► ToolExecutor ──► Service Desk tools ──► in-memory repository
-      │   start_turn → call_model ⇄ run_tools     lookup · validate · trusted context ·     (data/seed/*.json)
-      │   → limit_reached / END                   idempotency key · error shaping
-      │   state checkpointed after every node ──► SqliteSaver (.aegisdesk/checkpoints.sqlite)
-      ▼
-BaseChatModel.bind_tools(...) ◄── build_chat_model(Settings, allowlist)
-                                    ├── ChatAnthropic   (hosted)
-prompts/service_desk/v1.yaml        ├── ChatOllama      (local)
+ServiceDeskGraphAgent (LangGraph) ──────► ToolExecutor ──┬► Service Desk tools ──► in-memory repository
+      │   start_turn → call_model ⇄ run_tools     lookup ·   │                          (data/seed/*.json)
+      │   → limit_reached / END                   validate · └► Knowledge tools ──► Retriever ──► VectorStore
+      │   state checkpointed after every node     identity     (search_knowledge_base,  │ access    (memory | pgvector)
+      │        └──► SqliteSaver                                  retrieve_document)     │ filter
+      ▼                                                                                 ▼
+BaseChatModel.bind_tools(...) ◄── build_chat_model(Settings, allowlist)             Embedder
+                                    ├── ChatAnthropic   (hosted)                    (hashing | Ollama)
+prompts/service_desk/v2.yaml        ├── ChatOllama      (local)
                                     └── ScriptedChatModel (offline fake, tests)
+
+aegisdesk ask ──► GroundedAnswerer: Retriever ─► no evidence? stop : context ─► LLM ─► verify citations
 
 (ToolCallingAgent, the M1 hand-written loop, is kept as a reference: `--engine loop`.)
 ```
+
+### RAG pipeline
+
+```
+ingest:  documents/*.md ─► validate metadata ─► clean ─► chunk (by heading, IDs DOC-X-NNN#NN)
+                        ─► embed (768-d) ─► store (one transaction per document; Alembic schema)
+query:   question + UserContext ─► embed ─► search top-k WHERE access rule ─► score ≥ min_score
+                        ─► <documents> context ─► structured answer ─► citations ⊆ retrieved
+```
+
+* **RAG** (`src/aegisdesk/rag/`): details in [RAG_DESIGN.md](RAG_DESIGN.md); decisions in [ADR 0005](adr/0005-postgresql-pgvector.md) (PostgreSQL + pgvector) and [ADR 0006](adr/0006-embeddings.md) (embeddings). Access control is enforced inside the vector query, before ranking. Retrieved text is untrusted data; the M1 tool boundary still decides what can happen.
+* **Evaluation** (`evals/datasets/`, `src/aegisdesk/evals/`): deterministic retrieval metrics with a CI gate (0 access violations, hit rate ≥ 0.85).
 
 ### LangGraph topology
 
@@ -120,18 +135,19 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `identity/` | `src/aegisdesk/identity/` (simulated login; OIDC later) | M1 |
 | `data/seed/` | `data/seed/` | M1 |
 | `graphs/`, `agents/` | `src/aegisdesk/graphs/`, `src/aegisdesk/agents/` | M1–M2 (M4 adds more agents) |
-| `rag/` | `src/aegisdesk/rag/` | M3 |
+| `rag/` | `src/aegisdesk/rag/`; documents in `data/documents/` | M3 |
 | `mcp_servers/` | `src/aegisdesk/mcp_servers/` | M5 |
 | `governance/` | `src/aegisdesk/governance/` | M6 |
 | `persistence/` | `src/aegisdesk/persistence/` (checkpointer) | M2 |
-| `approvals/`, `migrations/` | … | M7 |
+| `migrations/` | `migrations/` (Alembic), `alembic.ini` | M3 |
+| `approvals/` | … | M7 |
 | `observability/`, `infrastructure/` | … | M8 |
-| `evals/` | `evals/` | M9 |
+| `evals/` | `evals/datasets/` (data), `src/aegisdesk/evals/` (evaluators) | M3 (retrieval); M9 (full suite) |
 | `apps/api`, `apps/ui` | … | M10 |
 
 ## Diagrams still to come
 
-Written as each milestone lands: RAG pipeline (M3), MCP interactions (M5), the full security boundary (M6; its first version is described above), approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
+Written as each milestone lands: MCP interactions (M5), the full security boundary (M6; its first version is described above), approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
 
 ## Decisions
 

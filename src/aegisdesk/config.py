@@ -35,6 +35,16 @@ class Environment(StrEnum):
     PRODUCTION = "production"
 
 
+class EmbeddingProvider(StrEnum):
+    HASH = "hash"  # deterministic, offline; tests and CI
+    OLLAMA = "ollama"
+
+
+class VectorStoreKind(StrEnum):
+    MEMORY = "memory"
+    PGVECTOR = "pgvector"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -64,6 +74,17 @@ class Settings(BaseSettings):
     seed_data_dir: Path = PROJECT_ROOT / "data" / "seed"
     # Where LangGraph saves conversation threads (git-ignored).
     checkpoint_db_path: Path = PROJECT_ROOT / ".aegisdesk" / "checkpoints.sqlite"
+
+    # Knowledge base (RAG)
+    documents_dir: Path = PROJECT_ROOT / "data" / "documents"
+    embedding_provider: EmbeddingProvider = EmbeddingProvider.HASH
+    embedding_model: str = "nomic-embed-text"
+    vector_store: VectorStoreKind = VectorStoreKind.MEMORY
+    database_url: str = "postgresql+psycopg://aegisdesk:aegisdesk@localhost:5432/aegisdesk"
+    rag_top_k: int = Field(default=4, ge=1, le=20)
+    # Below this cosine similarity a chunk is not treated as evidence.
+    # Unset: use the embedder's calibrated default.
+    rag_min_score: float | None = Field(default=None, ge=-1.0, le=1.0)
 
 
 @lru_cache(maxsize=1)

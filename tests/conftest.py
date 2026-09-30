@@ -9,6 +9,10 @@ from aegisdesk.config import PROJECT_ROOT, Settings, get_settings
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.identity.context import UserContext, authenticate
 from aegisdesk.prompts.loader import Prompt, load_prompt
+from aegisdesk.rag.embeddings import HashingEmbedder
+from aegisdesk.rag.ingestion.pipeline import ingest_directory
+from aegisdesk.rag.retrieval.retriever import Retriever
+from aegisdesk.rag.store.memory import InMemoryVectorStore
 
 # Env vars that would otherwise leak from a developer's shell or .env into tests.
 _MODEL_ENV_VARS = (
@@ -23,6 +27,12 @@ _MODEL_ENV_VARS = (
     "OLLAMA_BASE_URL",
     "AGENT_MAX_STEPS",
     "AGENT_MAX_TOOL_CALLS",
+    "EMBEDDING_PROVIDER",
+    "EMBEDDING_MODEL",
+    "VECTOR_STORE",
+    "DATABASE_URL",
+    "RAG_TOP_K",
+    "RAG_MIN_SCORE",
 )
 
 
@@ -62,3 +72,16 @@ def repository() -> ServiceDeskRepository:
 def aisha(repository: ServiceDeskRepository) -> UserContext:
     """E1004, a finance employee (the spec's example user)."""
     return authenticate(repository, "E1004")
+
+
+@pytest.fixture(scope="session")
+def _knowledge_index() -> InMemoryVectorStore:
+    store = InMemoryVectorStore()
+    ingest_directory(PROJECT_ROOT / "data" / "documents", HashingEmbedder(), store)
+    return store
+
+
+@pytest.fixture
+def retriever(_knowledge_index: InMemoryVectorStore) -> Retriever:
+    """Retriever over the real corpus with the offline hashing embedder (read-only, shared)."""
+    return Retriever(HashingEmbedder(), _knowledge_index, top_k=4)

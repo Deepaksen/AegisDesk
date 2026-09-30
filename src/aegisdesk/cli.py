@@ -9,6 +9,10 @@
     aegisdesk agent --as E1004 --thread T1 "..."   continue a stored thread, even after restart
     aegisdesk agent --as E1004 --engine loop "..." the Milestone 1 hand-written loop
     aegisdesk thread T1 --as E1004           show a stored thread
+    aegisdesk rag ingest                     build the knowledge-base index
+    aegisdesk rag search "vpn drops" --as E1004    inspect retrieved chunks and scores
+    aegisdesk ask "How do I configure VPN on macOS?" --as E1004   answer with citations
+    aegisdesk eval rag                       retrieval evaluation (recall, MRR, access)
 
 Every command prints the provider, model, prompt version, token usage and
 latency of each model call, because those are the facts later milestones will
@@ -22,15 +26,21 @@ import json
 import sys
 import uuid
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import ValidationError
 
 from aegisdesk.agents.loop import AgentRun, ModelStep, ToolStep
-from aegisdesk.agents.service_desk import build_service_desk_agent, build_service_desk_graph_agent
-from aegisdesk.config import Settings, get_settings
+from aegisdesk.agents.service_desk import (
+    DEFAULT_PROMPT_VERSION,
+    build_service_desk_agent,
+    build_service_desk_graph_agent,
+)
+from aegisdesk.config import PROJECT_ROOT, Settings, VectorStoreKind, get_settings
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
 from aegisdesk.graphs.service_desk_graph import NODE_START, ThreadAccessError, step_from_entry
 from aegisdesk.identity.context import AuthenticationError, UserContext, authenticate
 from aegisdesk.llm.allowlist import ModelNotAllowedError
@@ -39,6 +49,9 @@ from aegisdesk.llm.factory import ModelConfigurationError, build_chat_model
 from aegisdesk.llm.usage import TokenUsage
 from aegisdesk.persistence.checkpointer import sqlite_checkpointer
 from aegisdesk.prompts.loader import PromptNotFoundError, load_prompt
+from aegisdesk.rag.answer import GroundedAnswerer
+from aegisdesk.rag.factory import build_embedder, build_retriever, build_store
+from aegisdesk.rag.ingestion.pipeline import ingest_directory
 from aegisdesk.schemas.triage import TicketTriage
 
 
@@ -275,6 +288,112 @@ def cmd_thread(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_rag(settings: Settings, args: argparse.Namespace) -> int:
+    if args.rag_command == "ingest":
+        return _rag_ingest(settings, args)
+    return _rag_search(settings, args)
+
+
+def _rag_ingest(settings: Settings, args: argparse.Namespace) -> int:
+    embedder = build_embedder(settings)
+    store = build_store(settings)
+    if args.rebuild:
+        store.reset()
+    report = ingest_directory(settings.documents_dir, embedder, store)
+    print(
+        f"Ingested {settings.documents_dir} into {settings.vector_store.value} store "
+        f"with {report.embedding_model} in {report.seconds:.2f}s"
+    )
+    for label, ids in (
+        ("added", report.added),
+        ("updated", report.updated),
+        ("unchanged", report.unchanged),
+        ("removed", report.removed),
+    ):
+        if ids:
+            print(f"  {label:<9} {len(ids):>2}: {', '.join(ids)}")
+    print(f"  chunks written: {report.chunks_written}; total in store: {store.chunk_count()}")
+    if settings.vector_store is VectorStoreKind.MEMORY:
+        print("  (in-memory store: the index lives only for this process)")
+    return 0
+
+
+def _rag_search(settings: Settings, args: argparse.Namespace) -> int:
+    _, user = _login(settings, args.employee_id)
+    retriever = build_retriever(settings)
+    result = retriever.retrieve(args.query, user, top_k=args.k)
+    print(
+        f"top_k={result.top_k} min_score={result.min_score} embedder={retriever.embedding_model} "
+        f"latency={result.latency_ms:.1f}ms user={user.employee_id} roles={list(user.roles)}"
+    )
+    if not result.chunks:
+        print("No chunk reached the evidence threshold: insufficient evidence.")
+    ranked = [(s, True) for s in result.chunks] + [(s, False) for s in result.below_threshold]
+    for rank, (scored, usable) in enumerate(ranked, start=1):
+        chunk, meta = scored.chunk, scored.chunk.metadata
+        flag = "" if usable else "  (below threshold, not used)"
+        print(
+            f"\n#{rank} {scored.score:.3f} {chunk.chunk_id} | {meta.title} v{meta.version} "
+            f"| {chunk.section} | {meta.classification.value}{flag}"
+        )
+        body = chunk.text.split("\n", 1)[-1].replace("\n", " ")
+        print(f"   {body[:220]}{'...' if len(body) > 220 else ''}")
+    return 0
+
+
+def cmd_ask(settings: Settings, args: argparse.Namespace) -> int:
+    _, user = _login(settings, args.employee_id)
+    answerer = GroundedAnswerer(
+        build_retriever(settings),
+        _client(settings),
+        load_prompt(settings.prompts_dir, "grounded_answer", args.prompt_version),
+    )
+    result = answerer.answer(args.question, user)
+    print(result.answer)
+    if result.citations:
+        print("\nSources:")
+        for c in result.citations:
+            print(f"  [{c.chunk_id}] {c.title} v{c.version} - {c.section}")
+    retrieved = ", ".join(f"{s.chunk.chunk_id}({s.score:.2f})" for s in result.retrieval.chunks)
+    llm = _format_metadata(result.llm) if result.llm else "[model not called]"
+    print(
+        f"\n  status={result.status.value} retrieved=[{retrieved}] "
+        f"retrieval={result.retrieval.latency_ms:.1f}ms"
+    )
+    if result.rejected_citations:
+        print(f"  rejected citations (not retrieved): {result.rejected_citations}")
+    print(f"  {llm}")
+    return 0
+
+
+def cmd_eval(settings: Settings, args: argparse.Namespace) -> int:
+    dataset = RagDataset.load(args.dataset)
+    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    report = evaluate_retrieval(dataset, build_retriever(settings), repository)
+    print(
+        f"{report.dataset} v{report.dataset_version}: {len(report.results)} cases | "
+        f"embedder={report.embedding_model} top_k={report.top_k} min_score={report.min_score}"
+    )
+    print(f"  hit rate@k            {report.hit_rate:.2f}")
+    print(f"  recall@k              {report.recall:.2f}")
+    print(f"  MRR                   {report.mrr:.2f}")
+    print(f"  no-evidence accuracy  {report.no_evidence_accuracy:.2f}")
+    print(f"  access violations     {report.access_violations}")
+    print(f"  mean latency          {report.mean_latency_ms:.1f}ms")
+    for failure in report.failures:
+        case = failure.case
+        print(
+            f"  FAIL {case.id} ({case.category}) as {case.user}: {case.question!r} -> "
+            f"retrieved {failure.retrieved_document_ids or 'nothing'}, "
+            f"expected {case.expected_document_ids or 'nothing'}"
+            + (f", LEAKED {failure.access_violations}" if failure.access_violations else "")
+        )
+    gate_failed = report.access_violations > 0 or (
+        args.min_hit_rate is not None and report.hit_rate < args.min_hit_rate
+    )
+    return 1 if gate_failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aegisdesk", description="AegisDesk CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -306,7 +425,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="employee ID to sign in as (simulated authentication), e.g. E1004",
     )
-    p.add_argument("--prompt-version", default="v1")
+    p.add_argument(
+        "--prompt-version",
+        default=DEFAULT_PROMPT_VERSION,
+        help="v2 (default): with knowledge base; v1: the Milestone 1 agent",
+    )
     p.add_argument("--quiet", action="store_true", help="print only the answer")
     p.add_argument(
         "--engine",
@@ -315,6 +438,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="graph: LangGraph with persisted threads (default); loop: the M1 hand-written loop",
     )
     p.add_argument("--thread", help="thread ID to continue (graph engine); a new one if omitted")
+
+    rag = sub.add_parser("rag", help="knowledge base: ingest documents, inspect retrieval")
+    rag_sub = rag.add_subparsers(dest="rag_command", required=True)
+    p = rag_sub.add_parser("ingest", help="load, chunk, embed and store the documents")
+    p.add_argument("--rebuild", action="store_true", help="drop the index and re-embed everything")
+    p = rag_sub.add_parser("search", help="show the chunks retrieved for a query, with scores")
+    p.add_argument("query")
+    p.add_argument("--as", dest="employee_id", required=True, help="employee ID (access filter)")
+    p.add_argument("--k", type=int, default=None, help="top-k (default RAG_TOP_K)")
+
+    p = sub.add_parser("ask", help="answer a question from the documents, with citations")
+    p.add_argument("question")
+    p.add_argument("--as", dest="employee_id", required=True, help="employee ID (access filter)")
+    p.add_argument("--prompt-version", default="v1")
+
+    ev = sub.add_parser("eval", help="run an evaluation suite")
+    ev_sub = ev.add_subparsers(dest="eval_command", required=True)
+    p = ev_sub.add_parser("rag", help="deterministic retrieval evaluation")
+    p.add_argument("--dataset", type=Path, default=PROJECT_ROOT / "evals/datasets/rag_v1.yaml")
+    p.add_argument("--min-hit-rate", type=float, default=None, help="fail if hit rate is lower")
 
     p = sub.add_parser("thread", help="show a stored conversation thread")
     p.add_argument("thread_id")
@@ -329,6 +472,9 @@ COMMANDS = {
     "repeat": cmd_repeat,
     "agent": cmd_agent,
     "thread": cmd_thread,
+    "rag": cmd_rag,
+    "ask": cmd_ask,
+    "eval": cmd_eval,
 }
 
 
@@ -336,6 +482,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.command](get_settings(), args)
+    except AuthenticationError as exc:
+        print(f"Login failed: {exc}", file=sys.stderr)
+        return 2
     except (
         ValidationError,
         ModelNotAllowedError,

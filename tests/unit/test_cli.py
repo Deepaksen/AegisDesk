@@ -109,3 +109,37 @@ def test_loop_engine_is_still_available(capsys: pytest.CaptureFixture[str]) -> N
     out = capsys.readouterr().out
     assert "tool   get_my_assets({}) ok" in out
     assert "thread_id=" not in out
+
+
+def test_rag_search_shows_scored_chunks(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["rag", "search", "error GP-512", "--as", "E1004", "--k", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "DOC-VPN-001#05 | VPN Troubleshooting Guide v2.4 | Error GP-512 | internal" in out
+
+
+def test_ask_cites_sources_and_declines_without_evidence(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["ask", "What does error GP-512 mean?", "--as", "E1004"]) == 0
+    out = capsys.readouterr().out
+    assert "[DOC-VPN-001#05] VPN Troubleshooting Guide v2.4" in out
+    assert "status=answered" in out
+
+    assert main(["ask", "What is on the canteen menu?", "--as", "E1004"]) == 0
+    out = capsys.readouterr().out
+    assert "status=no_evidence" in out and "[model not called]" in out
+
+
+def test_eval_rag_passes_gate(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["eval", "rag", "--min-hit-rate", "0.85"]) == 0
+    assert "access violations     0" in capsys.readouterr().out
+    assert main(["eval", "rag", "--min-hit-rate", "0.99"]) == 1
+
+
+def test_agent_answers_policy_questions_from_the_knowledge_base(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["agent", "--as", "E1004", "What does VPN error GP-512 mean?"]) == 0
+    out = capsys.readouterr().out
+    assert "search_knowledge_base" in out
+    assert "DOC-VPN-001#05" in out

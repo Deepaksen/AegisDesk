@@ -186,28 +186,38 @@ def _best_matching_tool(tools: list[dict[str, Any]], user_text: str) -> dict[str
 def _fill_schema(schema: dict[str, Any], defs: dict[str, Any], user_text: str) -> dict[str, Any]:
     """Deterministically produce arguments matching a JSON schema object.
 
-    Enums pick the first value mentioned in the user's text (else the first
-    value). Strings with a `pattern` take the first match in the text; other
-    strings take the text itself. Booleans are False and numbers are 0.
+    Fields with a default use it. Enums pick the first value mentioned in the
+    user's text (else the first value). Strings with a `pattern` take the first
+    match in the text; other strings take the text's first paragraph. Lists of
+    pattern-constrained strings take every match. Booleans are False and
+    numbers take their minimum (or 0).
     """
     lowered = user_text.lower()
     args: dict[str, Any] = {}
     for name, prop in schema.get("properties", {}).items():
         resolved = _resolve(prop, defs)
-        if "enum" in resolved:
+        if "default" in prop or "default" in resolved:
+            args[name] = prop.get("default", resolved.get("default"))
+        elif "enum" in resolved:
             options = [str(v) for v in resolved["enum"]]
             args[name] = next((o for o in options if o.lower() in lowered), options[0])
         elif resolved.get("type") == "boolean":
             args[name] = False
         elif resolved.get("type") in ("integer", "number"):
-            args[name] = 0
+            args[name] = resolved.get("minimum", 0)
         elif resolved.get("type") == "array":
-            args[name] = []
+            # A list of pattern-constrained strings (e.g. citation IDs) gets every
+            # distinct match in the text; any other list is empty.
+            item_pattern = _resolve(resolved.get("items", {}), defs).get("pattern")
+            matches = re.findall(item_pattern.strip("^$"), user_text) if item_pattern else []
+            args[name] = list(dict.fromkeys(matches))
         elif "pattern" in resolved:
-            found = re.search(resolved["pattern"].strip("^$"), user_text, re.IGNORECASE)
-            args[name] = found.group(0) if found else user_text
+            match = re.search(resolved["pattern"].strip("^$"), user_text, re.IGNORECASE)
+            args[name] = match.group(0) if match else user_text
         else:
-            args[name] = user_text[: resolved.get("maxLength", 200)]
+            # The first paragraph only, so an attached context block is not echoed.
+            first_paragraph = user_text.split("\n\n", 1)[0]
+            args[name] = first_paragraph[: resolved.get("maxLength", 200)]
     return args
 
 

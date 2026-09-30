@@ -1,0 +1,184 @@
+# RAG retrieval evaluation dataset.
+#
+# Each case: who asks (a synthetic employee), the question, which documents
+# must be retrieved (expected_document_ids), facts a correct answer contains
+# (expected_facts, used by answer-level evaluators), and documents the user
+# must never receive (forbidden_document_ids, access control).
+# answerable: false means the user has no document that answers it.
+# expect_no_evidence: true means retrieval should return nothing usable at all
+# (the system must say it has insufficient evidence).
+name: rag_retrieval
+version: 1
+cases:
+  - id: rag-001
+    category: vpn
+    user: E1004
+    question: How do I configure VPN on macOS?
+    expected_document_ids: [DOC-VPN-001]
+    expected_facts: ["vpn.northstar.example", "Self Service", "Privacy & Security"]
+    answerable: true
+  - id: rag-002
+    category: vpn
+    user: E1004
+    question: My VPN keeps disconnecting every 10 minutes. What should I try?
+    expected_document_ids: [DOC-VPN-001]
+    expected_facts: ["6.2", "power saving"]
+    answerable: true
+  - id: rag-003
+    category: vpn
+    user: E1001
+    question: What does GlobalProtect error GP-512 mean?
+    expected_document_ids: [DOC-VPN-001]
+    expected_facts: ["certificate has expired"]
+    answerable: true
+  - id: rag-004
+    category: password
+    user: E1002
+    question: How long is my account locked after too many failed sign-in attempts?
+    expected_document_ids: [DOC-PWD-001]
+    expected_facts: ["5 failed", "15 minutes"]
+    answerable: true
+  - id: rag-005
+    category: password
+    user: E1005
+    question: What is the minimum password length?
+    expected_document_ids: [DOC-PWD-001]
+    expected_facts: ["14 characters"]
+    answerable: true
+  - id: rag-006
+    category: it_handbook
+    user: E1004
+    question: What are the IT service desk opening hours?
+    expected_document_ids: [DOC-IT-001]
+    expected_facts: ["07:00", "19:00"]
+    answerable: true
+  - id: rag-007
+    category: it_handbook
+    user: E1002
+    question: I lost my laptop on the train. What do I need to do?
+    expected_document_ids: [DOC-IT-001]
+    expected_facts: ["24 hours"]
+    answerable: true
+  - id: rag-008
+    category: software
+    user: E1001
+    question: How do I get software that is not in the Self Service catalogue?
+    expected_document_ids: [DOC-SW-001]
+    expected_facts: ["manager approval", "5 business days"]
+    answerable: true
+  - id: rag-009
+    category: software
+    user: E1005
+    question: Am I allowed to install a torrent client?
+    expected_document_ids: [DOC-SW-001]
+    expected_facts: ["never allowed"]
+    answerable: true
+  - id: rag-010
+    category: access
+    user: E1004
+    question: Who has to approve my FinanceERP access request?
+    expected_document_ids: [DOC-ACC-001]
+    expected_facts: ["manager"]
+    answerable: true
+  - id: rag-011
+    category: access
+    user: E1002
+    question: What happens to application access that I have not used for 90 days?
+    expected_document_ids: [DOC-ACC-001]
+    expected_facts: ["revoked"]
+    answerable: true
+  - id: rag-012
+    category: privileged
+    user: E1001
+    question: For how long can privileged admin access be granted?
+    expected_document_ids: [DOC-PAM-001]
+    expected_facts: ["8 hours"]
+    answerable: true
+  - id: rag-013
+    category: security
+    user: E1002
+    question: How do I report a phishing email?
+    expected_document_ids: [DOC-SEC-001]
+    expected_facts: ["Report Phishing"]
+    answerable: true
+  - id: rag-014
+    category: remote
+    user: E1001
+    question: How much is the home office allowance?
+    expected_document_ids: [DOC-RW-001]
+    expected_facts: ["EUR 300"]
+    answerable: true
+  - id: rag-015
+    category: remote
+    user: E1004
+    question: I want to work from Spain for two weeks. What do I need to do?
+    expected_document_ids: [DOC-RW-001]
+    expected_facts: ["manager and HR", "10 days"]
+    answerable: true
+  - id: rag-016
+    category: github
+    user: E1005
+    question: As a contractor, how long does my GitHub access last?
+    expected_document_ids: [DOC-GH-001]
+    expected_facts: ["90 days", "sponsor"]
+    answerable: true
+  - id: rag-017
+    category: finance_confidential
+    user: E1004
+    question: Which FinanceERP invoices need approval by a Controller?
+    expected_document_ids: [DOC-FIN-001]
+    expected_facts: ["EUR 10,000"]
+    answerable: true
+  - id: rag-018
+    category: incident_confidential
+    user: E1013
+    question: Who do I escalate a P1 incident to if it is not mitigated in 30 minutes?
+    expected_document_ids: [DOC-INC-001]
+    expected_facts: ["Kenji Watanabe"]
+    answerable: true
+  - id: rag-019
+    category: restricted
+    user: E1006
+    question: How do I connect to the production database?
+    expected_document_ids: [DOC-PDB-001]
+    expected_facts: ["db-bastion.northstar.internal"]
+    answerable: true
+
+  # --- access control: the document exists but this user may not see it ---
+  - id: rag-020
+    category: access_control
+    user: E1004
+    question: How do I connect to the production database through the bastion host?
+    expected_document_ids: []
+    forbidden_document_ids: [DOC-PDB-001]
+    answerable: false
+  - id: rag-021
+    category: access_control
+    user: E1001
+    question: Which FinanceERP invoices need approval by a Controller?
+    expected_document_ids: []
+    forbidden_document_ids: [DOC-FIN-001]
+    answerable: false
+  - id: rag-022
+    category: access_control
+    user: E1002
+    question: What is the escalation path and response time for P1 incidents?
+    expected_document_ids: []
+    forbidden_document_ids: [DOC-INC-001]
+    answerable: false
+
+  # --- no document covers these ---
+  - id: rag-023
+    category: out_of_scope
+    expect_no_evidence: true
+    user: E1004
+    question: What is on the canteen menu this Friday?
+    expected_document_ids: []
+    answerable: false
+  - id: rag-024
+    category: out_of_scope
+    expect_no_evidence: true
+    user: E1001
+    question: How many days of parental leave do new fathers get?
+    expected_document_ids: []
+    answerable: false

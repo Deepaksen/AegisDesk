@@ -3,6 +3,8 @@
 Anthropic: set ANTHROPIC_API_KEY (optionally MODEL_NAME).
 Ollama:    run `ollama serve` and `ollama pull llama3.2` (optionally OLLAMA_BASE_URL, MODEL_NAME).
 
+Ollama embeddings: also `ollama pull nomic-embed-text`.
+
 These tests assert shape, not wording: real models are not deterministic.
 """
 
@@ -17,11 +19,17 @@ import pytest
 from aegisdesk.agents.service_desk import build_service_desk_agent, build_service_desk_graph_agent
 from aegisdesk.config import ModelProvider, Settings
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
 from aegisdesk.identity.context import authenticate
 from aegisdesk.llm.client import LLMClient
 from aegisdesk.llm.factory import build_chat_model
 from aegisdesk.persistence.checkpointer import sqlite_checkpointer
-from aegisdesk.prompts.loader import Prompt
+from aegisdesk.prompts.loader import Prompt, load_prompt
+from aegisdesk.rag.answer import AnswerStatus, GroundedAnswerer
+from aegisdesk.rag.factory import build_embedder
+from aegisdesk.rag.ingestion.pipeline import ingest_directory
+from aegisdesk.rag.retrieval.retriever import Retriever
+from aegisdesk.rag.store.memory import InMemoryVectorStore
 from aegisdesk.schemas.triage import TicketTriage, TriageCategory
 
 pytestmark = pytest.mark.live
@@ -117,3 +125,38 @@ def test_graph_agent_uses_tools_and_keeps_the_thread(
 
     assert "get_my_assets" in [s.tool_name for s in first.tool_steps]
     assert "NS-LT-0101" in second.answer
+
+
+def test_grounded_answer_cites_the_right_chunk(
+    live_settings: Settings, retriever: Retriever
+) -> None:
+    repository = ServiceDeskRepository.from_seed(live_settings.seed_data_dir)
+    answerer = GroundedAnswerer(
+        retriever,
+        _client(live_settings),
+        load_prompt(live_settings.prompts_dir, "grounded_answer", "v1"),
+    )
+
+    result = answerer.answer("What does error GP-512 mean?", authenticate(repository, "E1004"))
+
+    assert result.status is AnswerStatus.ANSWERED
+    assert "DOC-VPN-001#05" in [c.chunk_id for c in result.citations]
+    assert "certificate" in result.answer.lower()
+
+
+def test_ollama_embeddings_pass_the_retrieval_gate(tmp_path: Path) -> None:
+    settings = _ollama_settings().model_copy(update={"embedding_provider": "ollama"})
+    try:
+        embedder = build_embedder(settings)
+        embedder.embed_query("probe")
+    except Exception as exc:  # model not pulled, wrong dimension, ...
+        pytest.skip(f"Ollama embedding model unavailable: {exc}")
+    store = InMemoryVectorStore()
+    ingest_directory(settings.documents_dir, embedder, store)
+    report = evaluate_retrieval(
+        RagDataset.load(settings.documents_dir.parents[1] / "evals/datasets/rag_v1.yaml"),
+        Retriever(embedder, store, top_k=4),
+        ServiceDeskRepository.from_seed(settings.seed_data_dir),
+    )
+    assert report.access_violations == 0
+    assert report.hit_rate >= 0.85

@@ -11,6 +11,25 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aegisdesk
+          POSTGRES_PASSWORD: aegisdesk
+          POSTGRES_DB: aegisdesk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegisdesk -d aegisdesk"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://aegisdesk:aegisdesk@localhost:5432/aegisdesk
+      # The vector-store contract tests also run against pgvector (they reset its contents).
+      AEGIS_TEST_DATABASE_URL: postgresql+psycopg://aegisdesk:aegisdesk@localhost:5432/aegisdesk
+
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +49,12 @@ jobs:
       - name: Type check
         run: uv run mypy src tests
 
+      - name: Database migrations
+        run: uv run alembic upgrade head
+
       # Live provider tests need credentials or a running Ollama; they are run by hand.
-      - name: Unit tests
+      - name: Tests (unit, integration incl. pgvector, security)
         run: uv run pytest -m "not live"
+
+      - name: RAG retrieval evaluation gate
+        run: uv run aegisdesk eval rag --min-hit-rate 0.85
