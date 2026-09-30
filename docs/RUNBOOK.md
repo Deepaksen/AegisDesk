@@ -56,6 +56,8 @@ docker compose logs api --since 10m  # JSON logs: trace_id, request_id, thread_i
 | Re-seed access data | `docker compose run --rm migrate` (idempotent: never overwrites existing rows) |
 | Re-index documents | `docker compose exec api aegisdesk rag ingest` (unchanged documents are skipped) |
 | Reset everything | `docker compose down -v` (deletes the database volume) |
+| Finish approved-but-unprovisioned requests | `docker compose exec api aegisdesk approvals reconcile --as E1006` (IT admin; idempotent, safe to repeat) |
+| Rehearse failures | `AEGIS_FAULTS=model_timeout:router`, `db_error:access`, `mcp_unavailable:action`, … on `api`/`mcp` (never in production); `uv run aegisdesk eval golden --dataset evals/reliability/faults_v1.yaml` |
 
 ## Troubleshoot
 
@@ -69,6 +71,11 @@ docker compose logs api --since 10m  # JSON logs: trace_id, request_id, thread_i
 | Manager sees no approvals | wrong approver (e.g. E1011 for E1004's request), or it expired (`APPROVAL_TTL_HOURS`) | check `GET /api/v1/approvals/{id}` as the requester |
 | Approval accepted but the conversation did not continue | thread not paused (already resumed), or the request still waits for another step | the decision response has `note`; see `pending_approvals` in the thread |
 | A write was denied with `write_budget_exceeded` | more than `limits.max_writes_per_request` writes in one request | expected for runaway loops; start a new request |
+| API answers `503 model_timeout` / `model_unavailable` / `circuit_open` | the model provider is slow or down; the circuit opens after `BREAKER_FAILURE_THRESHOLD` failures and retries one call after `BREAKER_RESET_SECONDS` | check provider status; `/ready` → `circuits`; `aegisdesk_model_errors_total` by category; clients retry after `Retry-After` |
+| API answers `503 checkpoint_unavailable` / `access_unavailable` / `audit_unavailable` | database down or unreachable | `docker compose ps postgres`; nothing was half-done: writes are refused without an audit record |
+| API answers `409 request_in_progress` | the client retried while its first attempt was still running | retry after `Retry-After`; a crashed attempt is taken over after `IDEMPOTENCY_STALE_SECONDS` |
+| API answers `422 idempotency_key_reused` | the client reused a key for a different message | a new key per new message |
+| "approved, but access could not be granted automatically" | provisioning failed after approval (store, MCP server or tool down) | fix the cause, then `aegisdesk approvals reconcile --as <IT admin>` |
 | Answers look like raw JSON | the offline fake model (`MODEL_PROVIDER=fake`) echoes tool results | configure a real model (README) |
 | UI says "API unreachable" | wrong API URL in the sidebar, or the API is down | `AEGIS_API_URL`, `curl /health` |
 

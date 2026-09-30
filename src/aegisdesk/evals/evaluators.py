@@ -68,7 +68,14 @@ def check_case(run: CaseRun) -> list[Check]:
     checks: list[Check] = []
     add = checks.append
 
-    add(Check("completed", run.error is None, run.error or ""))
+    if expected.raises is not None:
+        raised = (run.error or "").split(":", 1)[0]
+        add(Check("raises", raised == expected.raises, f"error={run.error!r}"))
+    else:
+        add(Check("completed", run.error is None, run.error or ""))
+    if expected.stop_reason is not None:
+        ended = run.runs[-1].stop_reason.value if run.runs else None
+        add(Check("stop_reason", ended == expected.stop_reason, f"stop_reason={ended}"))
 
     # -- routing / trajectory ------------------------------------------------------
     if expected.agents is not None and run.config is not SystemConfig.SINGLE:

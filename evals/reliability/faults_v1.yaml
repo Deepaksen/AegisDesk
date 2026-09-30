@@ -1,0 +1,148 @@
+# Reliability suite (Milestone 11): the spec's failure list, injected at the real seams
+# (AEGIS_FAULTS), with the behaviour the system must show. Run with:
+#   uv run aegisdesk eval golden --dataset evals/reliability/faults_v1.yaml --config multi
+#
+# Every case must: finish without crashing (or fail with the expected error), write
+# nothing it should not, stay fully traced, and tell the user what happened.
+name: reliability
+version: 1
+today: "2026-09-30"
+cases:
+  # -- model timeout / outage ---------------------------------------------------------
+  - id: rel-01
+    category: failure
+    description: Router model times out on every attempt; the turn ends safely
+    user: {employee_id: E1004}
+    input: My VPN keeps disconnecting. I already followed the troubleshooting guide. Create a ticket.
+    setup: {faults: "model_timeout:router", configs: [multi, multi_mcp]}
+    expected:
+      stop_reason: model_error
+      expected_facts: ["temporarily unavailable"]
+      effects: {}
+  - id: rel-02
+    category: failure
+    description: Specialist model unreachable; no tool runs, the answer says so
+    user: {employee_id: E1004}
+    input: Show me my open tickets
+    setup: {faults: "model_unavailable:service_desk", configs: [multi, multi_mcp]}
+    expected:
+      stop_reason: model_error
+      forbidden_tools: [list_my_tickets]
+      expected_facts: ["temporarily unavailable"]
+      effects: {}
+
+  # -- malformed model responses ---------------------------------------------------------
+  - id: rel-03
+    category: failure
+    description: Unparsable routing output; the user is asked to rephrase, nothing runs
+    user: {employee_id: E1004}
+    input: What laptop is assigned to me?
+    setup: {faults: "model_malformed:router", configs: [multi, multi_mcp]}
+    expected:
+      stop_reason: final_answer
+      forbidden_tools: [get_my_assets]
+      expected_facts: ["rephrase"]
+      effects: {}
+  - id: rel-04
+    category: failure
+    description: Every tool call has broken JSON arguments; answered as errors, stops at the step limit, no write
+    user: {employee_id: E1004}
+    input: "Create a ticket: my VPN is broken and I cannot work"
+    setup: {faults: "model_malformed:service_desk", configs: [multi, multi_mcp]}
+    expected:
+      expected_facts: ["allowed number of steps"]
+      effects: {}
+
+  # -- database errors ---------------------------------------------------------------------
+  - id: rel-05
+    category: failure
+    description: Audit database down; the write is refused (never act without a record)
+    user: {employee_id: E1004}
+    input: My VPN keeps disconnecting. I already followed the troubleshooting guide. Create a ticket.
+    setup: {faults: "db_error:audit"}
+    expected:
+      expected_facts: ["audit_unavailable"]
+      effects: {}
+  - id: rel-06
+    category: failure
+    description: Access database down; the request is not created and the user is told
+    user: {employee_id: E1004}
+    input: Please create an access request for FinanceERP for month-end reporting
+    setup: {faults: "db_error:access", configs: [multi, multi_mcp]}
+    expected:
+      expected_facts: ["temporarily unavailable"]
+      effects: {}
+  - id: rel-07
+    category: failure
+    description: Checkpoint database down; the request fails cleanly (API answers 503)
+    user: {employee_id: E1004}
+    input: Show me my open tickets
+    setup: {faults: "db_error:checkpoint"}
+    expected:
+      raises: StoreUnavailableError
+      effects: {}
+
+  # -- MCP timeout / outage --------------------------------------------------------------
+  - id: rel-08
+    category: failure
+    description: Read tool times out over MCP (retried once); no invented data
+    user: {employee_id: E1004}
+    input: What laptop is assigned to me?
+    setup: {faults: "tool_timeout:get_my_assets", transport: mcp_inprocess, configs: [multi, multi_mcp]}
+    expected:
+      forbidden_facts: ["NS-LT-0101"]
+      expected_facts: ["timeout"]
+      effects: {}
+  - id: rel-09
+    category: failure
+    description: Action server unreachable; the write is not retried and not done
+    user: {employee_id: E1004}
+    input: My VPN keeps disconnecting. I already followed the troubleshooting guide. Create a ticket.
+    setup: {faults: "mcp_unavailable:action", transport: mcp_inprocess, configs: [multi, multi_mcp]}
+    expected:
+      expected_facts: ["unavailable"]
+      effects: {}
+
+  # -- tool failure --------------------------------------------------------------------------
+  - id: rel-10
+    category: failure
+    description: The ticket tool fails; the error is reported, nothing is written
+    user: {employee_id: E1004}
+    input: My VPN keeps disconnecting. I already followed the troubleshooting guide. Create a ticket.
+    setup: {faults: "tool_error:create_ticket"}
+    expected:
+      expected_facts: ["internal_error"]
+      effects: {}
+  - id: rel-11
+    category: failure
+    description: Knowledge search fails; no invented answer or citation
+    user: {employee_id: E1004}
+    input: How do I configure VPN on macOS?
+    setup: {faults: "retrieval_error", configs: [multi, multi_mcp]}
+    expected:
+      forbidden_facts: ["vpn.northstar.example", "DOC-VPN-001"]
+      effects: {}
+  - id: rel-12
+    category: failure
+    description: Provisioning fails after approval; the user is told, access is not granted (reconcile finishes it later)
+    user: {employee_id: E1004}
+    input: Please create an access request for FinanceERP for month-end reporting
+    setup:
+      faults: "tool_error:provision_access"
+      decisions: [{approver: E1010, decision: approve}]
+      configs: [multi, multi_mcp]
+    expected:
+      requires_approval: true
+      expected_facts: ["could not be granted automatically"]
+      effects: {access_requests_created: 1}
+
+  # -- duplicate request -------------------------------------------------------------------
+  - id: rel-13
+    category: failure
+    description: The same request submitted three times creates one ticket
+    user: {employee_id: E1004}
+    input: My VPN keeps disconnecting. I already followed the troubleshooting guide. Create a ticket.
+    setup: {repeat: 3}
+    expected:
+      required_tools: [create_ticket]
+      effects: {tickets_created: 1}

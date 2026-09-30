@@ -93,8 +93,20 @@ class Settings(BaseSettings):
     model_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
     model_max_tokens: int = Field(default=1024, gt=0, le=64_000)
     model_timeout_seconds: float = Field(default=60.0, gt=0)
-    # Transport-level retries for read-only model calls. Kept small on purpose.
+    # Retries of a failed model call (timeouts, outages, rate limits), owned by the
+    # application's ModelGuard (M11); provider SDK retries are off. Kept small on purpose.
     model_max_retries: int = Field(default=2, ge=0, le=5)
+    model_retry_backoff_seconds: float = Field(default=0.5, ge=0, le=30)
+
+    # Circuit breakers (Milestone 11): after N consecutive failed calls to a model or
+    # an MCP server, fail fast for this many seconds, then try one call again.
+    breaker_failure_threshold: int = Field(default=5, ge=1, le=100)
+    breaker_reset_seconds: float = Field(default=30.0, gt=0, le=3600)
+
+    # Duplicate requests (Milestone 11): how long a stored response is replayed for
+    # the same Idempotency-Key, and when an unfinished one may be taken over.
+    idempotency_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
+    idempotency_stale_seconds: int = Field(default=300, ge=10, le=24 * 3600)
 
     anthropic_api_key: SecretStr | None = None
     ollama_base_url: str = "http://localhost:11434"

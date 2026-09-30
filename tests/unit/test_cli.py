@@ -231,3 +231,10 @@ def test_telemetry_check_prints_no_secrets(
     assert "should-not-appear" not in out and "lsv2_should_not_appear" not in out
     report = json.loads(out)
     assert report["exporter"] == "none" and report["otlp_headers"] == "set"
+
+
+def test_reconcile_needs_an_it_admin(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["approvals", "reconcile", "--as", "E1004"]) == 2
+    assert "it_admin" in capsys.readouterr().err
+    assert main(["approvals", "reconcile", "--as", "E1006"]) == 0
+    assert "Nothing to reconcile" in capsys.readouterr().out

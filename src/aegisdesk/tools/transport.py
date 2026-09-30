@@ -33,6 +33,7 @@ from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.tokens import TokenIssuer
 from aegisdesk.mcp_servers.catalogue import SERVER_TOOLS, McpServerName, build_servers
+from aegisdesk.reliability.breaker import breaker
 from aegisdesk.tools.base import ToolSpec
 from aegisdesk.tools.executor import CompositeToolRunner, ToolExecutor, ToolRunner
 from aegisdesk.tools.remote import McpGateway, McpTarget, RemoteToolRunner
@@ -49,8 +50,11 @@ class ToolFactory:
         targets: dict[McpServerName, McpTarget] | None = None,
         token_secret: str | None = None,
         timeout_seconds: float = 10.0,
+        breaker_threshold: int = 5,
+        breaker_reset_seconds: float = 30.0,
     ) -> None:
         self.transport = transport
+        self._breaker = (breaker_threshold, breaker_reset_seconds)
         self.gateway = gateway
         self._timeout = timeout_seconds
         self._mcp: McpGateway | None = None
@@ -94,6 +98,8 @@ class ToolFactory:
             targets=targets,
             token_secret=secret,
             timeout_seconds=settings.mcp_timeout_seconds,
+            breaker_threshold=settings.breaker_failure_threshold,
+            breaker_reset_seconds=settings.breaker_reset_seconds,
         )
 
     def runner(self, agent: AgentIdentity, tools: Sequence[ToolSpec[Any, Any]]) -> ToolRunner:
@@ -115,6 +121,11 @@ class ToolFactory:
                         issuer=self._issuer,
                         allowed=allowed,
                         timeout_seconds=self._timeout,
+                        circuit=breaker(
+                            f"mcp:{server}",
+                            failure_threshold=self._breaker[0],
+                            reset_seconds=self._breaker[1],
+                        ),
                     )
                 )
         # Keep the configured tool order, so the model sees the same tool list

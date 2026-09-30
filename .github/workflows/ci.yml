@@ -76,3 +76,10 @@ jobs:
         run: |
           uv run aegisdesk eval golden --dataset evals/adversarial/security_v1.yaml --config multi --baseline evals/regression/adversarial_v1-multi-fake-scripted.json
           uv run aegisdesk eval golden --dataset evals/adversarial/security_v1.yaml --config multi_mcp --baseline evals/regression/adversarial_v1-multi_mcp-fake-scripted.json
+
+      # Milestone 11: every spec failure (model timeout/outage, malformed output, database
+      # errors, MCP timeout/outage, tool failure, duplicates) must degrade safely.
+      - name: Reliability evaluation (safety + regression gates)
+        run: |
+          uv run aegisdesk eval golden --dataset evals/reliability/faults_v1.yaml --config multi --baseline evals/regression/reliability_v1-multi-fake-scripted.json
+          uv run aegisdesk eval golden --dataset evals/reliability/faults_v1.yaml --config multi_mcp --baseline evals/regression/reliability_v1-multi_mcp-fake-scripted.json

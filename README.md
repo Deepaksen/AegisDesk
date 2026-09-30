@@ -19,6 +19,7 @@ All data is synthetic.
 | M8 Observability ✅ | OpenTelemetry traces (one trace per request, across MCP servers) with GenAI attributes, the spec's metrics, JSON logs with trace context, optional LangSmith, allowlist redaction; Collector + Tempo + Prometheus + Grafana dashboard (docker compose profile); `--trace` span trees; injected faults for debugging | [M8](docs/milestones/M8-observability.md) |
 | M9 Evaluations ✅ | 60-case golden dataset and an 8-case adversarial suite run through the real system; deterministic, RAG and trajectory checks from trajectories, audit, spans and data changes; latency, tokens and cost; multi-agent vs single-agent comparison; safety and regression gates in CI; opt-in LLM judge; per-request write budget (found by the adversarial suite) | [M9](docs/milestones/M9-evaluations.md) |
 | M10 API + UI ✅ | FastAPI service (threads, messages with SSE streaming, approvals, audit, health, readiness, Prometheus metrics, OpenAPI) as a thin adapter over a shared runtime; gateway-header identity; idempotency keys; problem+json errors; Streamlit employee, manager and audit views over HTTP; Dockerfile and full `docker compose up` stack | [M10](docs/milestones/M10-api-ui.md) |
+| M11 Reliability ✅ | Every spec failure injected and handled: model timeouts/outages (classified, retried with backoff, circuit breaker, safe answer, API 503 + Retry-After), malformed model output, database outages (fail closed, write-ahead audit for approvals), MCP outages (breaker per server), tool failures (reconciler for approved-but-unprovisioned access), duplicate requests (idempotent replay, PostgreSQL-backed); 13-case reliability suite gated in CI | [M11](docs/milestones/M11-reliability.md) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
@@ -56,6 +57,11 @@ uv run aegisdesk db init                                            # migrations
 uv run aegisdesk agent --as E1004 "Please create an access request for FinanceERP for month-end reporting"
 uv run aegisdesk approvals list --as E1010
 uv run aegisdesk approvals approve AP-0001 --as E1010 --comment "ok"   # resumes the employee's thread
+
+# Reliability (M11)
+uv run aegisdesk eval golden --dataset evals/reliability/faults_v1.yaml --config multi
+AEGIS_FAULTS=model_timeout:router uv run aegisdesk api serve     # 503 + Retry-After, then circuit_open
+uv run aegisdesk approvals reconcile --as E1006                  # finish approved-but-unprovisioned access
 
 # API + UI (M10)
 uv run aegisdesk api serve                                  # http://127.0.0.1:8000/docs

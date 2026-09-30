@@ -70,6 +70,10 @@ Defined once in `observability/metrics.py::CATALOGUE`; Prometheus names shown.
 | `aegisdesk_policy_denials_total` | tool, reason | policy_denials_total |
 | `aegisdesk_rag_retrieval_latency_seconds_*` | store | rag_retrieval_latency |
 | `aegisdesk_rag_no_evidence_total` | — | rag_no_evidence_total |
+| `aegisdesk_http_requests_total`, `aegisdesk_http_latency_seconds_*` | method, route, status_code | API (M10) |
+| `aegisdesk_model_errors_total` | category, agent | failed model call attempts (M11) |
+| `aegisdesk_circuit_transitions_total` | circuit, state | breakers opening/closing (M11) |
+| `aegisdesk_idempotency_replays_total` | route | duplicate requests answered from storage (M11) |
 
 `task_success_rate` is computed in the dashboard (1 − failed / total). Tool metrics are counted where the tool actually runs; a remote call that never reaches the server (timeout, unavailable) is counted by the client instead, so nothing is counted twice.
 

@@ -56,6 +56,7 @@ from aegisdesk.observability import faults
 from aegisdesk.observability.logging import JsonFormatter
 from aegisdesk.observability.setup import configure_telemetry
 from aegisdesk.rag.retrieval.retriever import Retriever
+from aegisdesk.reliability.breaker import reset_breakers
 from aegisdesk.tools.transport import ToolFactory
 
 logger = logging.getLogger(__name__)
@@ -247,6 +248,7 @@ class EvalRunner:
             result.skipped = f"not applicable to {config.value}"
             return result
         self._spans.clear()
+        reset_breakers()  # every case starts with closed circuits (M11)
         repository = ServiceDeskRepository.from_seed(
             self._settings.seed_data_dir,
             today=lambda: self._today,

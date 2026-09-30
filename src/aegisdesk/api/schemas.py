@@ -174,3 +174,5 @@ class Problem(BaseModel):
     category: str | None = None
     request_id: str | None = None
     trace_id: str | None = None
+    thread_id: str | None = None
+    retry_after: int | None = None  # seconds; also sent as the Retry-After header

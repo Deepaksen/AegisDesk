@@ -39,6 +39,7 @@ from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import UserContext
 from aegisdesk.observability import faults, tracing
 from aegisdesk.observability.metrics import instruments
+from aegisdesk.reliability.errors import StoreUnavailableError
 from aegisdesk.tools.base import ToolAccess, ToolCallContext, ToolError, ToolSpec
 
 if TYPE_CHECKING:
@@ -126,14 +127,22 @@ class CompositeToolRunner:
 
 def refused_unknown_tool(name: str) -> ToolOutcome:
     """A tool this agent does not have. Traced and counted like any other refusal."""
-    message = f"There is no tool named {name!r}."
-    content = json.dumps({"error": {"category": "unknown_tool", "message": message}})
-    outcome = ToolOutcome(name, OutcomeStatus.ERROR, content, 0.0, "unknown_tool")
+    return refused_call(name, "unknown_tool", f"There is no tool named {name!r}.")
+
+
+def refused_call(name: str, category: str, message: str) -> ToolOutcome:
+    """A tool call refused before it could run (unknown tool, malformed arguments...).
+
+    Still an `execute_tool` span and a counted tool error: every call the model
+    requested shows up in traces and metrics, whether or not anything ran.
+    """
+    content = json.dumps({"error": {"category": category, "message": message}})
+    outcome = ToolOutcome(name, OutcomeStatus.ERROR, content, 0.0, category)
     with tracing.span(
         f"execute_tool {name}", **{tracing.OPERATION: "execute_tool", tracing.TOOL_NAME: name}
     ) as current:
         current.set_attribute(tracing.STATUS, outcome.status.value)
-        tracing.mark_error(current, "unknown_tool")
+        tracing.mark_error(current, category)
     record_tool_metrics(outcome)
     return outcome
 
@@ -250,15 +259,26 @@ class ToolExecutor:
         if self._gateway is None:
             return self._run(spec, parsed, user, request_id, thread_id, error, elapsed)
 
-        authorization = self._gateway.authorize(
-            tool=name,
-            access=spec.access,
-            args=parsed.model_dump(mode="json"),
-            user=user,
-            agent=agent or self._agent,
-            request_id=request_id,
-            thread_id=thread_id,
-        )
+        try:
+            authorization = self._gateway.authorize(
+                tool=name,
+                access=spec.access,
+                args=parsed.model_dump(mode="json"),
+                user=user,
+                agent=agent or self._agent,
+                request_id=request_id,
+                thread_id=thread_id,
+            )
+        except StoreUnavailableError:
+            # M11: approval evidence could not be read. Fail closed: nothing runs.
+            logger.warning(
+                "Tool %s: authorization store unavailable (request_id=%s)", name, request_id
+            )
+            return error(
+                "unavailable",
+                "A system this action needs is temporarily unavailable, so it was not "
+                "completed. Tell the user to try again in a few minutes.",
+            )
         match authorization.decision.decision:
             case Decision.DENY:
                 reasons = ", ".join(authorization.decision.reasons)
@@ -302,6 +322,17 @@ class ToolExecutor:
                 output = spec.handler(parsed, context)
         except ToolError as exc:
             return error(exc.category, str(exc))
+        except StoreUnavailableError as exc:
+            # M11: a backing store is down. Not a bug, and retrying a write here is not
+            # safe; the model tells the user, who can retry (idempotently) later.
+            logger.warning(
+                "Tool %s: %s store unavailable (request_id=%s)", name, exc.store, request_id
+            )
+            return error(
+                "unavailable",
+                "A system this action needs is temporarily unavailable, so it was not "
+                "completed. Tell the user to try again in a few minutes.",
+            )
         except Exception:
             logger.exception("Tool %s failed (request_id=%s)", name, request_id)
             return error("internal_error", "The tool failed unexpectedly. Try again later.")

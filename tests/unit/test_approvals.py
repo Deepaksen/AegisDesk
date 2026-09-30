@@ -95,7 +95,12 @@ def test_finance_erp_pauses_then_resumes_after_manager_approval(
         (e.agent_id, e.policy_decision, e.approval_id, e.approver_id) for e in provisioning
     } == {("access_workflow", "allow", pending["approval_id"], "E1010")}
     decisions = [e for e in audit_log.events if e.action == "approval_decision"]
-    assert [(e.approver_id, e.outcome) for e in decisions] == [("E1010", "approved")]
+    # Write-ahead (M11): recorded before the approval changed, then the outcome.
+    assert [(e.phase.value, e.approver_id, e.outcome) for e in decisions] == [
+        ("decision", "E1010", "approved"),
+        ("outcome", "E1010", "approved"),
+    ]
+    assert decisions[0].call_id == decisions[1].call_id
 
 
 def test_rejection_closes_the_request_without_access(

@@ -613,6 +613,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("approval_id")
         p.add_argument("--as", dest="employee_id", required=True, help="approver's employee ID")
         p.add_argument("--comment", default=None)
+    p = ap_sub.add_parser(
+        "reconcile", help="finish approved requests that were never provisioned (IT admin, M11)"
+    )
+    p.add_argument("--as", dest="employee_id", required=True, help="an IT admin's employee ID")
 
     api = sub.add_parser("api", help="HTTP API (Milestone 10)")
     api_sub = api.add_subparsers(dest="api_command", required=True)
@@ -844,6 +848,8 @@ def cmd_approvals(settings: Settings, args: argparse.Namespace) -> int:
         "  (DATA_STORE=memory: approvals exist only inside one process; "
         "use DATA_STORE=postgres to decide from another process.)"
     )
+    if args.approvals_command == "reconcile":
+        return _reconcile(settings, repository, approver)
     try:
         if args.approvals_command == "list":
             pending = service.list_pending_for(approver)
@@ -880,6 +886,19 @@ def cmd_approvals(settings: Settings, args: argparse.Namespace) -> int:
         print(f"Assistant: {decision.resumed.answer}")
         _print_trace(decision.resumed.trace_id)
     return 0
+
+
+def _reconcile(settings: Settings, repository: ServiceDeskRepository, operator: UserContext) -> int:
+    if "it_admin" not in operator.roles:
+        print("Refused: reconciling provisioning needs the it_admin role.", file=sys.stderr)
+        return 2
+    with AegisRuntime.open(settings, repository=repository) as runtime:
+        results = runtime.reconcile()
+    if not results:
+        print("Nothing to reconcile: every approved request is provisioned.")
+    for r in results:
+        print(f"{r.request_id}  {r.action}" + (f"  {r.detail}" if r.detail else ""))
+    return 1 if any(r.action == "failed" for r in results) else 0
 
 
 def _format_approval(a: ApprovalRecord, repository: ServiceDeskRepository) -> str:

@@ -41,6 +41,9 @@ class Instruments:
     rag_latency: Histogram
     http_requests: Counter
     http_latency: Histogram
+    model_errors: Counter
+    circuit_transitions: Counter
+    idempotency_replays: Counter
 
 
 # (name, kind, unit, description): the single catalogue used by code, docs and tests.
@@ -63,6 +66,9 @@ CATALOGUE: list[tuple[str, str, str, str]] = [
     ("rag.retrieval.latency", "histogram", "s", "Retrieval latency"),
     ("http.requests", "counter", "{request}", "API requests, by method, route and status"),
     ("http.latency", "histogram", "s", "API request latency, by method and route"),
+    ("model.errors", "counter", "{attempt}", "Failed model call attempts, by category"),
+    ("circuit.transitions", "counter", "{transition}", "Circuit breakers opening and closing"),
+    ("idempotency.replays", "counter", "{request}", "Duplicate requests answered from storage"),
 ]
 
 
@@ -117,5 +123,8 @@ def instruments() -> Instruments:
             rag_latency=made["rag.retrieval.latency"],
             http_requests=made["http.requests"],
             http_latency=made["http.latency"],
+            model_errors=made["model.errors"],
+            circuit_transitions=made["circuit.transitions"],
+            idempotency_replays=made["idempotency.replays"],
         )
     return _instruments

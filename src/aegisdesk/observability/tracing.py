@@ -66,6 +66,11 @@ def mark_error(current: Span, category: str) -> None:
     current.set_status(Status(StatusCode.ERROR, category))
 
 
+def current_span_attribute(key: str, value: Any) -> None:
+    """Annotate whatever span is current (a no-op outside spans)."""
+    trace.get_current_span().set_attribute(key, value)
+
+
 def current_trace_id() -> str | None:
     context = trace.get_current_span().get_span_context()
     return format(context.trace_id, "032x") if context.is_valid else None

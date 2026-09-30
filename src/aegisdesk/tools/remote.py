@@ -46,6 +46,7 @@ from aegisdesk.identity.context import UserContext
 from aegisdesk.identity.tokens import TOKEN_META_KEY, TokenIssuer
 from aegisdesk.mcp_servers.catalogue import McpServerName
 from aegisdesk.observability import faults, propagation, tracing
+from aegisdesk.reliability.breaker import CircuitBreaker, breaker
 from aegisdesk.tools.executor import (
     OutcomeStatus,
     ToolOutcome,
@@ -210,9 +211,12 @@ class RemoteToolRunner:
         issuer: TokenIssuer,
         allowed: Collection[str],
         timeout_seconds: float,
+        circuit: CircuitBreaker | None = None,
     ) -> None:
         self._connection = connection
         self._server = server
+        # M11: one breaker per server, shared by every agent's runner in the process.
+        self._circuit = circuit or breaker(f"mcp:{server}")
         self._agent = agent
         self._issuer = issuer
         self._timeout = timeout_seconds
@@ -262,6 +266,21 @@ class RemoteToolRunner:
         if name not in self._tools:
             return refused_unknown_tool(name)
 
+        if not self._circuit.allow():
+            # The server kept failing: fail fast instead of waiting for another timeout.
+            with tracing.span(
+                f"mcp.call {self._server}/{name}",
+                **{tracing.TOOL_NAME: name, "aegisdesk.mcp.server": str(self._server)},
+            ) as current:
+                tracing.mark_error(current, "circuit_open")
+            failed = error(
+                "unavailable",
+                f"The {self._server} tool server is temporarily unavailable, so this was not "
+                "done. Tell the user to try again in a minute.",
+            )
+            record_tool_metrics(failed)
+            return failed
+
         attempts = 2 if self.is_read_only(name) else 1
         for attempt in range(1, attempts + 1):
             # A fresh token per attempt: short-lived, and bound to this server.
@@ -307,10 +326,12 @@ class RemoteToolRunner:
                 )
                 if attempt < attempts and exc.category in {"timeout", "unavailable"}:
                     continue
+                self._circuit.record_failure()
                 failed = error(exc.category, str(exc))
                 # The server never ran the tool, so this is the only place to count it.
                 record_tool_metrics(failed)
                 return failed
+            self._circuit.record_success()  # the server answered (even with a tool error)
             return _to_outcome(result, outcome)
         raise AssertionError("unreachable")  # pragma: no cover
 

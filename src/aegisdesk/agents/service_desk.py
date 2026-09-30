@@ -28,6 +28,7 @@ from aegisdesk.llm.factory import build_chat_model
 from aegisdesk.prompts.loader import load_prompt
 from aegisdesk.rag.factory import build_retriever
 from aegisdesk.rag.retrieval.retriever import Retriever
+from aegisdesk.reliability.model_guard import guard_for
 from aegisdesk.tools.executor import ToolExecutor
 from aegisdesk.tools.knowledge import build_knowledge_tools
 from aegisdesk.tools.service_desk import build_service_desk_tools
@@ -92,10 +93,12 @@ def build_service_desk_graph_agent(
     prompt_version: str = DEFAULT_PROMPT_VERSION,
     gateway: ActionGateway | None = None,
 ) -> ServiceDeskGraphAgent:
+    model = model if model is not None else build_chat_model(settings)
     return ServiceDeskGraphAgent(
         name=AGENT_NAME,
         version=AGENT_VERSION,
-        model=model if model is not None else build_chat_model(settings),
+        model=model,
+        guard=guard_for(model, settings),
         prompt=load_prompt(settings.prompts_dir, PROMPT_NAME, prompt_version),
         executor=_executor(settings, repository, retriever, prompt_version, gateway),
         limits=AgentLimits(

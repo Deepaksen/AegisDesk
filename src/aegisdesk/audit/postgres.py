@@ -16,6 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.types import Text
 
 from aegisdesk.audit.events import AuditError, AuditEvent
+from aegisdesk.observability import faults
 
 _COLUMNS = (
     "event_id, occurred_at, phase, call_id, request_id, trace_id, thread_id, user_id, "
@@ -41,6 +42,8 @@ class PgAuditLog:
         self._engine = engine
 
     def record(self, event: AuditEvent) -> None:
+        if faults.active("db_error", "audit"):  # M11: the audit database is down
+            raise AuditError("cannot record audit event: injected db_error")
         params: dict[str, Any] = event.model_dump(mode="python")
         params["phase"] = event.phase.value
         params["resource"] = json.dumps(event.resource)

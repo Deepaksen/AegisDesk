@@ -55,14 +55,15 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 from pydantic import ValidationError
 
-from aegisdesk.agents.loop import StopReason
+from aegisdesk.agents.loop import MODEL_UNAVAILABLE_ANSWER, StopReason
 from aegisdesk.graphs.state import ServiceDeskState, context_from
 from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.usage import TokenUsage
-from aegisdesk.observability import tracing
+from aegisdesk.observability import faults, tracing
 from aegisdesk.observability.logging import log_context
 from aegisdesk.observability.metrics import instruments
 from aegisdesk.prompts.loader import Prompt
+from aegisdesk.reliability.model_guard import ModelCallError, ModelGuard, guard_for
 from aegisdesk.schemas.routing import RoutingPlan
 from aegisdesk.tools.handoff import HANDOFF_TOOL, AgentName
 
@@ -104,6 +105,8 @@ class SupervisorState(ServiceDeskState, total=False):
     handoffs: int
     out_of_scope: bool
     routing_error: str | None
+    # M11: the model service failed while routing (timeout, outage, open circuit).
+    model_error: str | None
     # Access requests of this turn that the approval workflow is following.
     approval_requests: list[str]
 
@@ -170,12 +173,24 @@ def build_supervisor_graph(
     *,
     router_model: BaseChatModel,
     router_prompt: Prompt,
+    router_guard: ModelGuard | None = None,
     specialists: dict[AgentName, Specialist],
     limits: SupervisorLimits,
     checkpointer: BaseCheckpointSaver[Any] | None,
     approvals: ApprovalWorkflow | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     router = router_model.with_structured_output(RoutingPlan, include_raw=True)
+    guard = router_guard or guard_for(router_model)
+
+    def route(messages: list[BaseMessage]) -> dict[str, Any]:
+        if faults.active("model_malformed", "router"):
+            # What an unparsable routing answer looks like after include_raw=True.
+            return {
+                "raw": AIMessage(content="{not json"),
+                "parsed": None,
+                "parsing_error": "injected malformed routing output",
+            }
+        return cast(dict[str, Any], router.invoke(messages))
 
     # -- nodes -------------------------------------------------------------------
 
@@ -192,6 +207,7 @@ def build_supervisor_graph(
             "handoffs": 0,
             "out_of_scope": False,
             "routing_error": None,
+            "model_error": None,
             "approval_requests": [],
         }
 
@@ -211,9 +227,14 @@ def build_supervisor_graph(
             },
             **model_attrs,
         )
+        model_error: str | None = None
         try:
             with route_span as llm_span:
-                result = cast(dict[str, Any], router.invoke(messages))
+                try:
+                    result = guard.call(lambda: route(messages), target="router")
+                except ModelCallError as exc:
+                    tracing.mark_error(llm_span, exc.category)
+                    raise
                 raw = result.get("raw")
                 if isinstance(raw, AIMessage):
                     usage = TokenUsage.from_message(raw)
@@ -246,6 +267,9 @@ def build_supervisor_graph(
                         )
                 if not plan and not out_of_scope:
                     error = "routing produced no tasks"
+        except ModelCallError as exc:
+            model_error = exc.category
+            error = f"model unavailable: {exc.category}"
         except (ValidationError, ValueError) as exc:
             error = f"routing failed: {exc}"
 
@@ -262,6 +286,7 @@ def build_supervisor_graph(
             "plan": plan,
             "out_of_scope": out_of_scope,
             "routing_error": error,
+            "model_error": model_error,
             "llm_calls": state["llm_calls"] + 1,
             "input_tokens": state["input_tokens"] + usage.input_tokens,
             "output_tokens": state["output_tokens"] + usage.output_tokens,
@@ -312,11 +337,18 @@ def build_supervisor_graph(
                     current.set_attribute(tracing.STATUS, str(sub.get("stop_reason")))
                 sub_trajectory = [dict(e, agent=name.value) for e in sub.get("trajectory", [])]
                 answer = sub["messages"][-1].text
-                status = (
-                    "done"
-                    if sub.get("stop_reason") == StopReason.FINAL_ANSWER.value
-                    else "incomplete"
-                )
+                stop = sub.get("stop_reason")
+                status = "done" if stop == StopReason.FINAL_ANSWER.value else "incomplete"
+                if stop == StopReason.MODEL_ERROR.value:
+                    status = "failed"
+                    task["model_error"] = next(
+                        (
+                            e.get("error")
+                            for e in reversed(sub.get("trajectory", []))
+                            if e.get("kind") == "model" and e.get("error")
+                        ),
+                        "model_unavailable",
+                    )
                 if specialist.check_answer is not None:
                     answer, note = specialist.check_answer(answer, sub_trajectory)
             except Exception:  # a failing specialist must not take the whole turn down
@@ -375,7 +407,13 @@ def build_supervisor_graph(
 
     def respond(state: SupervisorState) -> dict[str, Any]:
         finished = [t for t in state.get("plan", []) if t["status"] != "pending"]
-        if state.get("routing_error"):
+        # M11: the model failed for the whole turn (routing, or every specialist).
+        model_down = bool(state.get("model_error")) or (
+            bool(finished) and all(t.get("model_error") for t in finished)
+        )
+        if model_down:
+            answer = MODEL_UNAVAILABLE_ANSWER
+        elif state.get("routing_error"):
             answer = ROUTING_FAILED_ANSWER
         elif state.get("out_of_scope") or not finished:
             answer = OUT_OF_SCOPE_ANSWER
@@ -389,7 +427,9 @@ def build_supervisor_graph(
         requests = approvals.requests_in(state["trajectory"]) if approvals else []
         return {
             "messages": [AIMessage(content=answer)],
-            "stop_reason": StopReason.FINAL_ANSWER.value,
+            "stop_reason": (
+                StopReason.MODEL_ERROR if model_down else StopReason.FINAL_ANSWER
+            ).value,
             "approval_requests": requests,
         }
 

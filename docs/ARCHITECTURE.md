@@ -15,8 +15,8 @@ This document describes the **target** architecture and marks what has been buil
 | M8 Observability | ✅ built ([notes](milestones/M8-observability.md), [design](OBSERVABILITY.md)) |
 | M9 Evaluations | ✅ built ([notes](milestones/M9-evaluations.md), [design](EVALUATION.md)) |
 | M10 API + UI | ✅ built ([notes](milestones/M10-api-ui.md), [API](API.md), [runbook](RUNBOOK.md)) |
-| M11 Reliability | not started |
-| M12 CI/CD | partial: lint, type and test gates from M0; RAG gate from M3; golden and adversarial safety + regression gates from M9; compose validation from M10 |
+| M11 Reliability | ✅ built ([notes](milestones/M11-reliability.md), [ADR 0017](adr/0017-resilience-degrade-safely.md)) |
+| M12 CI/CD | partial: lint, type and test gates from M0; RAG gate from M3; golden and adversarial safety + regression gates from M9; compose validation from M10; reliability suite gates from M11 |
 
 ## Guiding principle
 
@@ -57,7 +57,21 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M10
+## What exists after M11
+
+### Reliability
+
+```
+model call ──► ModelGuard: classify ─► retry (backoff+jitter) ─► breaker ──► safe answer + stop_reason=model_error ─► API 503 Retry-After
+tool call  ──► MCP: read retry once, never write retry ─► breaker per server ─► "unavailable" to the model
+store call ──► GuardedAccessStore / checkpoint / idempotency ─► StoreUnavailableError ─► tool "unavailable" | API 503
+approval   ──► write-ahead audit (refuse if not recorded) ─► decide ─► resume ─► provision ──(failed)──► reconcile
+request    ──► Idempotency-Key ─► new | replay stored response | 409 in flight | 422 reused
+```
+
+* **Reliability** (`src/aegisdesk/reliability/`, `persistence/idempotency.py`): every spec failure is classified at its seam and degrades to a safe, explained result; nothing is written without an audit record, and nothing is retried that is not safe to retry. Fault injection (`AEGIS_FAULTS`) covers all of them, and the reliability evaluation suite gates them in CI. See [M11](milestones/M11-reliability.md), [ADR 0017](adr/0017-resilience-degrade-safely.md).
+
+From M10:
 
 ### API, UI and deployment
 
@@ -268,7 +282,7 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 
 ## Diagrams still to come
 
-Written as each milestone lands: workflow (M7), observability architecture (M8), evaluation lifecycle (M9), API/UI and deployment (M10); reliability (M11) and release pipeline (M12) next.
+Written as each milestone lands: workflow (M7), observability architecture (M8), evaluation lifecycle (M9), API/UI and deployment (M10), reliability (M11); release pipeline (M12) next.
 
 ## Decisions
 

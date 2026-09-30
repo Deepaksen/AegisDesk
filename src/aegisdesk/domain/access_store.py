@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from aegisdesk.domain.access import (
     AccessRecord,
@@ -27,6 +27,8 @@ from aegisdesk.domain.access import (
     ApprovalStatus,
     ApprovalStep,
 )
+from aegisdesk.observability import faults
+from aegisdesk.reliability.errors import StoreUnavailableError, is_database_outage
 
 
 class AccessStore(Protocol):
@@ -223,3 +225,42 @@ class InMemoryAccessStore:
 
 def is_expired(approval: ApprovalRecord) -> bool:
     return approval.status is ApprovalStatus.PENDING and approval.expires_at <= _now()
+
+
+class GuardedAccessStore:
+    """Wraps any AccessStore so a database outage is a `StoreUnavailableError` (M11).
+
+    Callers (tools, the approval service) then report "unavailable" instead of
+    an unexpected driver exception. `AEGIS_FAULTS=db_error:access` simulates the
+    outage for every access-store call, reads and writes alike.
+    """
+
+    def __init__(self, inner: AccessStore) -> None:
+        self._inner = inner
+
+    @property
+    def inner(self) -> AccessStore:
+        return self._inner
+
+    def __getattr__(self, name: str) -> Any:
+        attribute = getattr(self._inner, name)
+        if not callable(attribute) or name.startswith("_"):
+            return attribute
+
+        def guarded(*args: Any, **kwargs: Any) -> Any:
+            if faults.active("db_error", "access"):
+                raise StoreUnavailableError("access")
+            try:
+                return attribute(*args, **kwargs)
+            except Exception as exc:
+                if is_database_outage(exc):
+                    raise StoreUnavailableError("access") from exc
+                raise
+
+        return guarded
+
+
+def guarded(store: AccessStore) -> AccessStore:
+    if isinstance(store, GuardedAccessStore):
+        return cast(AccessStore, store)
+    return cast(AccessStore, GuardedAccessStore(store))

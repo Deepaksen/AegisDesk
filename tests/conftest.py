@@ -18,6 +18,7 @@ from aegisdesk.rag.embeddings import HashingEmbedder
 from aegisdesk.rag.ingestion.pipeline import ingest_directory
 from aegisdesk.rag.retrieval.retriever import Retriever
 from aegisdesk.rag.store.memory import InMemoryVectorStore
+from aegisdesk.reliability.breaker import reset_breakers
 
 TODAY = date(2026, 9, 30)
 
@@ -55,6 +56,11 @@ _MODEL_ENV_VARS = (
     "LOG_FORMAT",
     "LOG_LEVEL",
     "AEGIS_FAULTS",
+    "IDEMPOTENCY_STALE_SECONDS",
+    "IDEMPOTENCY_TTL_HOURS",
+    "BREAKER_RESET_SECONDS",
+    "BREAKER_FAILURE_THRESHOLD",
+    "MODEL_RETRY_BACKOFF_SECONDS",
     "LANGSMITH_TRACING",
     "LANGSMITH_API_KEY",
     "EVAL_JUDGE_PROVIDER",
@@ -75,9 +81,11 @@ def _isolate_env(
         monkeypatch.setitem(Settings.model_config, "env_file", None)
     get_settings.cache_clear()
     faults.reload()
+    reset_breakers()
     yield
     get_settings.cache_clear()
     faults.reload()
+    reset_breakers()
 
 
 @pytest.fixture

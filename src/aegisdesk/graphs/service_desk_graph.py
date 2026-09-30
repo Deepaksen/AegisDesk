@@ -40,6 +40,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from aegisdesk.agents.loop import (
+    EMPTY_ANSWER,
+    MODEL_UNAVAILABLE_ANSWER,
     STEP_LIMIT_ANSWER,
     TOOL_LIMIT_ANSWER,
     AgentLimits,
@@ -54,12 +56,14 @@ from aegisdesk.agents.loop import (
 from aegisdesk.graphs.state import ServiceDeskState, claims_from, context_from
 from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.usage import TokenUsage
-from aegisdesk.observability import langsmith, tracing
+from aegisdesk.observability import faults, langsmith, tracing
 from aegisdesk.observability.logging import log_context
 from aegisdesk.observability.metrics import instruments
 from aegisdesk.observability.redaction import pseudonym
 from aegisdesk.prompts.loader import Prompt
-from aegisdesk.tools.executor import OutcomeStatus, ToolRunner
+from aegisdesk.reliability.errors import StoreUnavailableError, is_database_outage
+from aegisdesk.reliability.model_guard import ModelCallError, ModelGuard, guard_for
+from aegisdesk.tools.executor import OutcomeStatus, ToolRunner, refused_call
 
 NODE_START = "start_turn"
 NODE_MODEL = "call_model"
@@ -85,14 +89,18 @@ def build_tool_agent_graph(
     executor: ToolRunner,
     limits: AgentLimits,
     checkpointer: BaseCheckpointSaver[Any] | bool | None,
+    guard: ModelGuard | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     """A tool-calling agent as a graph. Used standalone (M2) and as a specialist subgraph (M4).
+
+    `guard` (M11) wraps every model call: retries, circuit breaker, failure categories.
 
     `checkpointer=False` compiles a subgraph that never checkpoints on its own,
     not even by inheriting its parent's checkpointer: the parent graph persists
     only what the specialist *returns*, never its private scratch messages.
     """
     model_with_tools = model.bind_tools(executor.model_definitions())
+    guard = guard or guard_for(model)
 
     # -- nodes: plain functions from state to a partial state update ----------
 
@@ -117,7 +125,13 @@ def build_tool_agent_graph(
             **{tracing.OPERATION: "chat", tracing.PROMPT: f"{prompt.name}@{prompt.version}"},
             **model_attrs,
         ) as llm_span:
-            reply = model_with_tools.invoke(messages)
+            try:
+                reply = guard.call(
+                    lambda: _invoke(model_with_tools, messages, prompt.name), target=prompt.name
+                )
+            except ModelCallError as exc:
+                tracing.mark_error(llm_span, exc.category)
+                return _model_failed(state, exc, started)
             usage = TokenUsage.from_message(reply)
             tracing.record_llm_call(
                 llm_span,
@@ -131,6 +145,12 @@ def build_tool_agent_graph(
                 "aegisdesk.requested_tools", [c["name"] for c in reply.tool_calls]
             )
         step = state["llm_calls"] + 1
+        error = None
+        if reply.invalid_tool_calls:
+            error = "malformed_tool_call"  # answered in run_tools, so the model can correct it
+        elif not reply.tool_calls and not reply.text.strip():
+            error = "empty_response"
+            reply = AIMessage(content=EMPTY_ANSWER)  # never an empty answer to the user
         entry = {
             "kind": "model",
             "step": step,
@@ -138,6 +158,7 @@ def build_tool_agent_graph(
             "output_tokens": usage.output_tokens,
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             "requested_tools": [c["name"] for c in reply.tool_calls],
+            "error": error,
         }
         return {
             "messages": [reply],
@@ -145,7 +166,11 @@ def build_tool_agent_graph(
             "input_tokens": state["input_tokens"] + usage.input_tokens,
             "output_tokens": state["output_tokens"] + usage.output_tokens,
             "trajectory": [*state["trajectory"], entry],
-            "stop_reason": None if reply.tool_calls else StopReason.FINAL_ANSWER.value,
+            "stop_reason": (
+                None
+                if reply.tool_calls or reply.invalid_tool_calls
+                else StopReason.FINAL_ANSWER.value
+            ),
         }
 
     def run_tools(state: ServiceDeskState, config: RunnableConfig) -> dict[str, Any]:
@@ -160,6 +185,38 @@ def build_tool_agent_graph(
         new_messages: list[BaseMessage] = []
         trajectory = list(state["trajectory"])
         stop_reason: str | None = None
+
+        for invalid in reply.invalid_tool_calls:
+            # Malformed arguments (not JSON): answer it like any refused call, so the
+            # model sees what went wrong and every tool call id gets a result.
+            made += 1
+            name = invalid.get("name") or "unknown"
+            content = refused_call(
+                name,
+                "malformed_tool_call",
+                "The tool call arguments were not valid JSON. Send the call again with "
+                "valid arguments.",
+            ).content
+            new_messages.append(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=invalid.get("id") or "",
+                    name=name,
+                    status="error",
+                )
+            )
+            trajectory.append(
+                {
+                    "kind": "tool",
+                    "step": state["llm_calls"],
+                    "tool_name": name,
+                    "args": {},
+                    "status": OutcomeStatus.ERROR.value,
+                    "latency_ms": 0.0,
+                    "error_category": "malformed_tool_call",
+                    "result": content,
+                }
+            )
 
         for call in reply.tool_calls:
             if made >= limits.max_tool_calls:
@@ -212,7 +269,8 @@ def build_tool_agent_graph(
 
     def after_model(state: ServiceDeskState) -> str:
         last = state["messages"][-1]
-        return NODE_TOOLS if isinstance(last, AIMessage) and last.tool_calls else END
+        wants_tools = isinstance(last, AIMessage) and (last.tool_calls or last.invalid_tool_calls)
+        return NODE_TOOLS if wants_tools else END
 
     def after_tools(state: ServiceDeskState) -> str:
         if state.get("stop_reason") == StopReason.MAX_TOOL_CALLS.value:
@@ -234,6 +292,59 @@ def build_tool_agent_graph(
     graph.add_edge(NODE_LIMIT, END)
 
     return graph.compile(checkpointer=checkpointer)
+
+
+@contextmanager
+def _checkpoint_errors() -> Iterator[None]:
+    try:
+        yield
+    except StoreUnavailableError:
+        raise
+    except Exception as exc:
+        if is_database_outage(exc):
+            raise StoreUnavailableError("checkpoint") from exc
+        raise
+
+
+def _invoke(model: Any, messages: list[BaseMessage], target: str) -> AIMessage:
+    if faults.active("model_malformed", target):
+        # What a provider returns when the model emits broken tool-call JSON.
+        return AIMessage(
+            content="",
+            invalid_tool_calls=[
+                {
+                    "type": "invalid_tool_call",
+                    "name": "create_ticket",
+                    "args": '{"title": "VPN',
+                    "id": f"malformed-{uuid.uuid4().hex[:8]}",
+                    "error": "injected malformed tool call",
+                }
+            ],
+        )
+    reply = model.invoke(messages)
+    if not isinstance(reply, AIMessage):
+        raise TypeError(f"model returned {type(reply).__name__}, not AIMessage")
+    return reply
+
+
+def _model_failed(state: ServiceDeskState, exc: ModelCallError, started: float) -> dict[str, Any]:
+    """The model service failed after retries: end the turn with a safe answer."""
+    step = state["llm_calls"] + 1
+    entry = {
+        "kind": "model",
+        "step": step,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+        "requested_tools": [],
+        "error": exc.category,
+    }
+    return {
+        "messages": [AIMessage(content=MODEL_UNAVAILABLE_ANSWER)],
+        "llm_calls": step,
+        "trajectory": [*state["trajectory"], entry],
+        "stop_reason": StopReason.MODEL_ERROR.value,
+    }
 
 
 def _not_executed(call_id: str, name: str) -> ToolMessage:
@@ -287,11 +398,18 @@ class ThreadedGraphAgent:
     def _authorised_state(self, thread_id: str, user: UserContext) -> dict[str, Any]:
         # Ownership is checked by application code *before* anything is written
         # to the thread, so a stranger cannot even append a message to it.
-        values: dict[str, Any] = self.graph.get_state(self._config(thread_id)).values
+        values: dict[str, Any] = self._state(thread_id).values
         owner = values.get("owner_id")
         if owner is not None and owner != user.employee_id:
             raise ThreadAccessError(f"Thread {thread_id!r} belongs to another employee.")
         return values
+
+    def _state(self, thread_id: str) -> Any:
+        """The thread's checkpoint; a database outage becomes StoreUnavailableError (M11)."""
+        if faults.active("db_error", "checkpoint"):
+            raise StoreUnavailableError("checkpoint")
+        with _checkpoint_errors():
+            return self.graph.get_state(self._config(thread_id))
 
     def run(
         self,
@@ -315,10 +433,11 @@ class ThreadedGraphAgent:
         with self._observed(
             "aegisdesk.request", request_id=request_id, thread_id=thread_id, user=user
         ) as observe:
-            before = len(self.graph.get_state(self._config(thread_id)).values.get("messages", []))
-            for node, update in self._stream(turn_input, thread_id, request_id):
-                if on_update is not None:
-                    on_update(node, update)
+            before = len(self._state(thread_id).values.get("messages", []))
+            with _checkpoint_errors():
+                for node, update in self._stream(turn_input, thread_id, request_id):
+                    if on_update is not None:
+                        on_update(node, update)
             return observe(self._result(thread_id, request_id, started, first_new=before + 1))
 
     def resume(self, thread_id: str, *, on_update: UpdateCallback | None = None) -> AgentRun:
@@ -329,7 +448,7 @@ class ThreadedGraphAgent:
         the approval records, which the resumed nodes read themselves. No model is
         called on this path.
         """
-        snapshot = self.graph.get_state(self._config(thread_id))
+        snapshot = self._state(thread_id)
         if not snapshot.interrupts:
             raise NotPausedError(f"Thread {thread_id!r} is not waiting for approval.")
         started = time.perf_counter()
@@ -341,10 +460,11 @@ class ThreadedGraphAgent:
             "aegisdesk.resume", request_id=request_id, thread_id=thread_id, user=None
         ) as observe:
             config = self._run_config(thread_id, request_id)
-            for chunk in self.graph.stream(command, config, stream_mode="updates"):
-                for node, update in chunk.items():
-                    if on_update is not None and node != "__interrupt__":
-                        on_update(node, update or {})
+            with _checkpoint_errors():
+                for chunk in self.graph.stream(command, config, stream_mode="updates"):
+                    for node, update in chunk.items():
+                        if on_update is not None and node != "__interrupt__":
+                            on_update(node, update or {})
             return observe(self._result(thread_id, request_id, started, first_new=before))
 
     @contextmanager
@@ -460,6 +580,7 @@ class ServiceDeskGraphAgent(ThreadedGraphAgent):
         executor: ToolRunner,
         limits: AgentLimits,
         checkpointer: BaseCheckpointSaver[Any],
+        guard: ModelGuard | None = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -471,6 +592,7 @@ class ServiceDeskGraphAgent(ThreadedGraphAgent):
                 executor=executor,
                 limits=limits,
                 checkpointer=checkpointer,
+                guard=guard,
             ),
             # Each model call and each tool round is one superstep, plus start/limit.
             recursion_limit=2 * limits.max_steps + 4,
@@ -487,6 +609,7 @@ def step_from_entry(entry: dict[str, Any]) -> TrajectoryStep:
                 latency_ms=entry["latency_ms"],
                 requested_tools=tuple(entry["requested_tools"]),
                 agent=agent,
+                error=entry.get("error"),
             )
         case "tool":
             return ToolStep(

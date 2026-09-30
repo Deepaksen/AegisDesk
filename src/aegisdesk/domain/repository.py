@@ -20,7 +20,7 @@ from aegisdesk.domain.access import (
     Approval,
     approval_steps,
 )
-from aegisdesk.domain.access_store import AccessStore, InMemoryAccessStore
+from aegisdesk.domain.access_store import AccessStore, InMemoryAccessStore, guarded
 from aegisdesk.domain.models import (
     Asset,
     Employee,
@@ -49,8 +49,9 @@ class ServiceDeskRepository:
         self._assets = {a.asset_tag: a for a in assets}
         self._tickets = {t.ticket_id: t for t in tickets}
         self._applications = {a.application_id: a for a in applications or []}
-        self.access_store: AccessStore = access_store or InMemoryAccessStore(
-            access, access_requests
+        # Guarded (M11): a database outage surfaces as StoreUnavailableError.
+        self.access_store: AccessStore = guarded(
+            access_store or InMemoryAccessStore(access, access_requests)
         )
         self._approval_ttl = approval_ttl
         self._today = today

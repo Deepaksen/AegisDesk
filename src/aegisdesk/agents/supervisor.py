@@ -40,6 +40,7 @@ from aegisdesk.llm.factory import build_chat_model
 from aegisdesk.prompts.loader import load_prompt
 from aegisdesk.rag.factory import build_retriever
 from aegisdesk.rag.retrieval.retriever import Retriever
+from aegisdesk.reliability.model_guard import guard_for
 from aegisdesk.tools.access import build_access_tools
 from aegisdesk.tools.base import ToolSpec
 from aegisdesk.tools.handoff import AgentName, build_handoff_tool
@@ -98,6 +99,7 @@ def build_supervisor_agent(
     The caller owns the factory and closes it when done with the agent.
     """
     model = model if model is not None else build_chat_model(settings)
+    guard = guard_for(model, settings)  # one breaker per model, shared by all its callers
     retriever = retriever or build_retriever(settings)
     agent_limits = AgentLimits(
         max_steps=settings.agent_max_steps, max_tool_calls=settings.agent_max_tool_calls
@@ -117,6 +119,7 @@ def build_supervisor_agent(
                 executor=tool_factory.runner(specialist_identity(agent, settings), tools[agent]),
                 limits=agent_limits,
                 checkpointer=False,  # the parent thread stores only what specialists return
+                guard=guard,
             ),
             recursion_limit=2 * agent_limits.max_steps + 4,
             check_answer=check_knowledge_answer if agent is AgentName.KNOWLEDGE else None,
@@ -141,6 +144,7 @@ def build_supervisor_agent(
         prompt=router_prompt,
         graph=build_supervisor_graph(
             router_model=model,
+            router_guard=guard,
             router_prompt=router_prompt,
             specialists=specialists,
             limits=limits,

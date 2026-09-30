@@ -159,6 +159,19 @@ class ApprovalService:
             self.refresh(approval.access_request_id)
             raise ApprovalError("expired", f"{approval_id} has expired; the request was closed.")
 
+        # Write-ahead audit (M11): the decision is recorded before anything changes, and
+        # if it cannot be recorded, nothing changes (AuditError: the API answers 503).
+        # Same rule as the tool gateway: never act without a record.
+        call_id = str(uuid.uuid4())
+        self._record(
+            approval,
+            approver,
+            outcome=wanted.value,
+            request_id=request_id,
+            phase=AuditPhase.DECISION,
+            call_id=call_id,
+            strict=True,
+        )
         changed = self._store.decide_approval(
             approval_id, status=wanted, decided_by=approver.employee_id, comment=comment
         )
@@ -169,7 +182,9 @@ class ApprovalService:
             return self._repeat(current, approver, wanted)
 
         request = self.refresh(approval.access_request_id)
-        self._record(current, approver, outcome=wanted.value, request_id=request_id)
+        self._record(
+            current, approver, outcome=wanted.value, request_id=request_id, call_id=call_id
+        )
         return DecisionResult(current, request, changed=True)
 
     def _repeat(
@@ -214,10 +229,13 @@ class ApprovalService:
         *,
         outcome: str,
         request_id: str | None,
+        phase: AuditPhase = AuditPhase.OUTCOME,
+        call_id: str | None = None,
+        strict: bool = False,
     ) -> None:
         event = AuditEvent(
-            phase=AuditPhase.OUTCOME,
-            call_id=str(uuid.uuid4()),
+            phase=phase,
+            call_id=call_id or str(uuid.uuid4()),
             request_id=request_id or f"approval-{uuid.uuid4()}",
             trace_id=tracing.current_trace_id(),
             thread_id=approval.thread_id,
@@ -243,5 +261,7 @@ class ApprovalService:
         try:
             self._audit.record(event)
         except AuditError:
-            # The decision itself is recorded on the approval (who, when, comment).
+            if strict:
+                raise
+            # After the write-ahead event, the approval row (who, when, comment) is the record.
             logger.exception("audit event for %s not recorded", approval.approval_id)

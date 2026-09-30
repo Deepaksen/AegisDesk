@@ -7,6 +7,16 @@
 * `mcp_unavailable:<server>` the MCP server is unreachable (-> unavailable)
 * `retrieval_error`          the knowledge base search fails
 
+Milestone 11 (reliability) adds the spec's failure list:
+
+* `model_timeout[:target]`     every model call attempt times out (`target`: `router`,
+                               or an agent's prompt name such as `service_desk`)
+* `model_unavailable[:target]` the model service is unreachable
+* `model_malformed[:target]`   the model returns broken output (unparsable routing,
+                               or a tool call whose arguments are not JSON)
+* `db_error:<store>`           a database is down: `audit`, `access` or `checkpoint`
+* duplicate requests need no fault: send the same Idempotency-Key twice
+
 Faults are read once from the environment and are off unless set. They exist
 only at seams that already handle the corresponding real failure, so the
 code paths exercised are the production ones.

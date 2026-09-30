@@ -68,7 +68,30 @@ data: { …MessageResponse… }
 
 ## Idempotency
 
-`Idempotency-Key: <client-chosen string>` on the messages endpoint turns into the request ID (`idem-` + a hash of user and key). A client retry with the same key reuses it, so the idempotent write tools (M1) return the existing ticket or access request instead of creating another, and the per-request write budget (M9) counts both attempts together. Without the header, every call is a new request.
+`Idempotency-Key: <client-chosen string>` on the messages endpoint (Milestone 11):
+
+| A request with a key that… | Response |
+|---|---|
+| is new | runs; a successful response is stored for `IDEMPOTENCY_TTL_HOURS` (24) |
+| finished before, same thread and text | the **stored response**, header `Idempotent-Replayed: true`; nothing runs again (SSE: a single `result` event) |
+| is still running | `409 request_in_progress`, `Retry-After: 1` |
+| was used for a different message | `422 idempotency_key_reused` |
+| failed before (5xx, model outage) | runs again: failures release the key |
+
+Keys are per user and stored in memory or PostgreSQL (migration 0004; a row lock per key, so replicas agree). The key also becomes the request ID (`idem-` + a hash of user and key), so writes made during a retried attempt reuse the idempotent tools (M1) and the per-request write budget (M9). Without the header, every call is a new request.
+
+## Failures (Milestone 11)
+
+| Situation | Response |
+|---|---|
+| model timeout, outage or rate limit (after retries) | `503`, `category` = `model_timeout` / `model_unavailable` / `model_rate_limited`, `Retry-After: 10`, `thread_id`, `detail` = the safe answer |
+| model circuit open (repeated failures) | `503 circuit_open`, immediately, `Retry-After: 10` |
+| model rejected the request (bad key, bad request) | `502 model_error` |
+| database down (checkpoints, access data, idempotency records) | `503 <store>_unavailable`, `Retry-After: 5` |
+| audit trail down while deciding an approval | `503 audit_unavailable`: the decision is refused, nothing changes |
+| tool, store or MCP server down *during* a turn | `200`: the answer says what could not be done (activity shows the failed step) |
+
+Streaming turns report the same problems as an `error` event (with `retry_after` in the body). `/ready` lists circuit-breaker states under `circuits`; an open circuit does not make the service unready.
 
 ## Errors
 

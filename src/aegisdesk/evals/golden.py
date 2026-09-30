@@ -113,6 +113,11 @@ class Expected(_Strict):
     forbidden_facts: list[str] = []
     expected_citations: list[str] = []
     effects: Effects = Effects()
+    # Reliability (M11): how the last run ended, e.g. model_error for a model outage.
+    stop_reason: str | None = None
+    # Reliability (M11): the request must fail with this exception type (e.g. a
+    # checkpoint outage surfaces as StoreUnavailableError, which the API maps to 503).
+    raises: str | None = None
 
 
 class Limits(_Strict):

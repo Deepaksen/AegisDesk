@@ -137,7 +137,9 @@ def _new_turn(
                     elif event.event == "result":
                         result = event.data
                     elif event.event == "error":
-                        raise ApiError(event.data["status"], event.data["title"])
+                        raise ApiError(
+                            event.data["status"], event.data["title"], event.data.get("detail")
+                        )
                 status.update(label="Done", state="complete", expanded=False)
             if result is not None:
                 _render_result(result)

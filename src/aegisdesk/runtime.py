@@ -28,9 +28,18 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import create_engine, text
 
-from aegisdesk.agents.loop import AgentRun, AgentStep, RouteStep, ToolStep, TrajectoryStep
+from aegisdesk.agents.loop import (
+    AgentRun,
+    AgentStep,
+    ModelStep,
+    RouteStep,
+    StopReason,
+    ToolStep,
+    TrajectoryStep,
+)
 from aegisdesk.agents.supervisor import build_supervisor_agent
 from aegisdesk.approvals.service import ApprovalService, DecisionResult
+from aegisdesk.approvals.workflow import workflow_identity
 from aegisdesk.audit.events import AuditLog
 from aegisdesk.config import (
     AuditStoreKind,
@@ -39,6 +48,7 @@ from aegisdesk.config import (
     Settings,
     VectorStoreKind,
 )
+from aegisdesk.domain.access import AccessRequest
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.governance.factory import build_audit_log, build_gateway
 from aegisdesk.graphs.service_desk_graph import (
@@ -47,10 +57,18 @@ from aegisdesk.graphs.service_desk_graph import (
     ThreadedGraphAgent,
     step_from_entry,
 )
-from aegisdesk.identity.context import UserContext
-from aegisdesk.persistence.factory import build_repository, open_checkpointer
+from aegisdesk.identity.context import AuthenticationError, UserContext, authenticate
+from aegisdesk.persistence.factory import (
+    build_idempotency_store,
+    build_repository,
+    open_checkpointer,
+)
+from aegisdesk.persistence.idempotency import IdempotencyStore, InMemoryIdempotencyStore
 from aegisdesk.rag.ingestion.loader import load_document
-from aegisdesk.tools.executor import OutcomeStatus
+from aegisdesk.reliability.breaker import breaker_states
+from aegisdesk.reliability.model_guard import OUTAGE
+from aegisdesk.tools.executor import OutcomeStatus, ToolRunner
+from aegisdesk.tools.provisioning import PROVISION_TOOL, PROVISIONABLE, build_provisioning_tools
 from aegisdesk.tools.transport import ToolFactory
 
 CITATION = re.compile(r"\bDOC-[A-Z]+-\d{3}\b")
@@ -137,6 +155,8 @@ def _tool_activity(step: ToolStep, repository: ServiceDeskRepository) -> Activit
 
 def activity_from_step(step: TrajectoryStep, repository: ServiceDeskRepository) -> Activity | None:
     if isinstance(step, RouteStep):
+        if (step.error or "").startswith(ROUTER_MODEL_ERROR):
+            return Activity("The assistant is not responding right now.", "error")
         if step.error:
             return Activity("Could not understand the request.", "error")
         if step.out_of_scope:
@@ -148,6 +168,8 @@ def activity_from_step(step: TrajectoryStep, repository: ServiceDeskRepository) 
     if isinstance(step, AgentStep) and step.status != "done":  # incomplete | failed
         label = AGENT_LABELS.get(step.agent, step.agent)
         return Activity(f"The {label} specialist could not finish.", "error")
+    if isinstance(step, ModelStep) and step.error in OUTAGE | {"model_error"}:
+        return Activity("The assistant is not responding right now.", "error")
     return None  # model steps: never shown (no chain-of-thought)
 
 
@@ -209,6 +231,12 @@ class TurnResult:
     input_tokens: int
     output_tokens: int
     latency_ms: float
+    # M11: why the model failed this turn (model_timeout, circuit_open...), if it did.
+    model_error: str | None = None
+
+    @property
+    def model_outage(self) -> bool:
+        return self.model_error in OUTAGE
 
 
 @dataclass(frozen=True)
@@ -231,9 +259,18 @@ class Decision:
     note: str | None = None
 
 
+@dataclass(frozen=True)
+class Reconciled:
+    request_id: str
+    action: str  # resumed | provisioned | failed | skipped
+    detail: str | None
+
+
 @dataclass
 class Readiness:
     components: dict[str, str] = field(default_factory=dict)
+    # Informational (M11): an open circuit means degraded, not "not ready".
+    circuits: dict[str, str] = field(default_factory=dict)
 
     @property
     def ready(self) -> bool:
@@ -256,8 +293,11 @@ class AegisRuntime:
         audit: AuditLog,
         agent: ThreadedGraphAgent,
         document_titles: dict[str, str],
+        idempotency: IdempotencyStore | None = None,
     ) -> None:
         self.settings = settings
+        self.idempotency = idempotency or InMemoryIdempotencyStore()
+        self.provisioner: ToolRunner | None = None
         self.repository = repository
         self.audit = audit
         self.agent = agent
@@ -287,7 +327,19 @@ class AegisRuntime:
             agent = build_supervisor_agent(
                 settings, repository, checkpointer=checkpointer, tool_factory=factory, **overrides
             )
-            yield cls(settings, repository, audit, agent, _document_titles(settings))
+            runtime = cls(
+                settings,
+                repository,
+                audit,
+                agent,
+                _document_titles(settings),
+                build_idempotency_store(settings),
+            )
+            # The deterministic workflow identity, the only one allowed to provision (M7).
+            runtime.provisioner = factory.runner(
+                workflow_identity(settings.aegis_env.value), build_provisioning_tools(repository)
+            )
+            yield runtime
 
     # -- conversation ----------------------------------------------------------------------
 
@@ -355,6 +407,9 @@ class AegisRuntime:
             input_tokens=run.usage.input_tokens,
             output_tokens=run.usage.output_tokens,
             latency_ms=run.latency_ms,
+            model_error=_model_error(new_steps)
+            if run.stop_reason is StopReason.MODEL_ERROR
+            else None,
         )
 
     def thread_view(self, user: UserContext, thread_id: str) -> ThreadView | None:
@@ -389,6 +444,52 @@ class AegisRuntime:
         except NotPausedError:
             return Decision(result, note=f"Thread {request.thread_id} is not paused.")
         return Decision(result, resumed=self.turn_result(run, first_step=len(before)))
+
+    def reconcile(self) -> list[Reconciled]:
+        """Finish access requests that were approved but never provisioned (M11).
+
+        Two ways this happens: the process died between the last decision and the
+        resume (the thread is still paused), or provisioning failed when it ran (a
+        store or MCP server was down). Only requests made through the assistant
+        (they have a thread) are touched; provisioning is idempotent and goes
+        through the policy gateway like any other call.
+        """
+        done: list[Reconciled] = []
+        for employee_id in self.repository.list_employee_ids():
+            for request in self.repository.access_requests_for(employee_id):
+                if request.thread_id is None or request.provisioned_at is not None:
+                    continue
+                if request.status not in PROVISIONABLE:
+                    continue
+                done.append(self._reconcile_one(request))
+        return done
+
+    def _reconcile_one(self, request: AccessRequest) -> Reconciled:
+        thread_id = request.thread_id or ""
+        with self._thread_lock(thread_id):
+            if self._paused(thread_id):
+                run = self.agent.resume(thread_id)
+                return Reconciled(request.request_id, "resumed", run.answer)
+        if self.provisioner is None:
+            return Reconciled(request.request_id, "skipped", "no provisioner configured")
+        try:
+            requester = authenticate(self.repository, request.employee_id)
+        except AuthenticationError:
+            return Reconciled(request.request_id, "skipped", "requester is not active")
+        outcome = self.provisioner.execute(
+            PROVISION_TOOL,
+            {"access_request_id": request.request_id},
+            user=requester,
+            request_id=f"reconcile-{request.request_id}",
+            thread_id=thread_id,
+        )
+        if outcome.status is OutcomeStatus.OK:
+            return Reconciled(request.request_id, "provisioned", None)
+        return Reconciled(request.request_id, "failed", outcome.error_category)
+
+    def _paused(self, thread_id: str) -> bool:
+        state = self.agent.graph.get_state({"configurable": {"thread_id": thread_id}})
+        return bool(state.interrupts)
 
     # -- audit -----------------------------------------------------------------------------
 
@@ -433,7 +534,21 @@ class AegisRuntime:
         except Exception as exc:
             ready.components["checkpointer"] = f"unavailable ({type(exc).__name__})"
         ready.components["agent"] = "ok"
+        ready.circuits = breaker_states()
         return ready
+
+
+ROUTER_MODEL_ERROR = "model unavailable: "
+
+
+def _model_error(steps: list[TrajectoryStep]) -> str:
+    """The failure category of the model call that ended the turn."""
+    for step in reversed(steps):
+        if isinstance(step, RouteStep) and (step.error or "").startswith(ROUTER_MODEL_ERROR):
+            return (step.error or "")[len(ROUTER_MODEL_ERROR) :]
+        if isinstance(step, ModelStep) and step.error in OUTAGE | {"model_error"}:
+            return step.error or "model_unavailable"
+    return "model_unavailable"
 
 
 def _document_titles(settings: Settings) -> dict[str, str]:

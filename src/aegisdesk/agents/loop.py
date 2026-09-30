@@ -49,12 +49,20 @@ TOOL_LIMIT_ANSWER = (
     "This request needed more actions than I'm allowed to take at once. "
     "Please split it into smaller requests, or contact the IT service desk directly."
 )
+# Milestone 11: what the user sees when the model fails, instead of an error page.
+MODEL_UNAVAILABLE_ANSWER = (
+    "The assistant is temporarily unavailable, so I couldn't finish this request. "
+    "Please try again in a moment. Anything listed as completed above was done; "
+    "nothing else was changed."
+)
+EMPTY_ANSWER = "Sorry, I couldn't produce an answer to that. Please try rephrasing your request."
 
 
 class StopReason(StrEnum):
     FINAL_ANSWER = "final_answer"
     MAX_STEPS = "max_steps"
     MAX_TOOL_CALLS = "max_tool_calls"
+    MODEL_ERROR = "model_error"  # the model service failed (M11); the answer says so
 
 
 @dataclass(frozen=True)
@@ -74,6 +82,8 @@ class ModelStep:
     latency_ms: float
     requested_tools: tuple[str, ...]
     agent: str | None = None  # which specialist made the call (multi-agent runs)
+    # M11: model_timeout | model_unavailable | ... | malformed_tool_call | empty_response
+    error: str | None = None
 
 
 @dataclass(frozen=True)

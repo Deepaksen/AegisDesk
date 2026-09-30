@@ -18,6 +18,11 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from aegisdesk.config import CheckpointStoreKind, DataStoreKind, Settings
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.persistence.checkpointer import sqlite_checkpointer
+from aegisdesk.persistence.idempotency import (
+    IdempotencyStore,
+    InMemoryIdempotencyStore,
+    PgIdempotencyStore,
+)
 
 
 def psycopg_url(database_url: str) -> str:
@@ -48,3 +53,12 @@ def open_checkpointer(settings: Settings) -> Iterator[BaseCheckpointSaver[Any]]:
     else:
         with sqlite_checkpointer(settings.checkpoint_db_path) as saver:
             yield saver
+
+
+def build_idempotency_store(settings: Settings) -> IdempotencyStore:
+    """Where duplicate-request records live: with the other durable data (M11)."""
+    ttl = timedelta(hours=settings.idempotency_ttl_hours)
+    stale = timedelta(seconds=settings.idempotency_stale_seconds)
+    if settings.data_store is DataStoreKind.POSTGRES:
+        return PgIdempotencyStore(settings.database_url, ttl=ttl, stale_after=stale)
+    return InMemoryIdempotencyStore(ttl=ttl, stale_after=stale)

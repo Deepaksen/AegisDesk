@@ -30,6 +30,8 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from aegisdesk.observability import faults
+
 
 class AuditPhase(StrEnum):
     DECISION = "decision"
@@ -99,6 +101,8 @@ class InMemoryAuditLog:
         self._lock = threading.Lock()
 
     def record(self, event: AuditEvent) -> None:
+        if faults.active("db_error", "audit"):  # M11: the audit database is down
+            raise AuditError("cannot record audit event: injected db_error")
         with self._lock:
             self._events.append(event)
 
