@@ -1,0 +1,146 @@
+{
+  "01-phases": {
+    "width": 1077,
+    "height": 167
+  },
+  "02-target-planes": {
+    "width": 933,
+    "height": 1211
+  },
+  "03-control-data-plane": {
+    "width": 834,
+    "height": 528
+  },
+  "04-multicloud-topology": {
+    "width": 1001,
+    "height": 977
+  },
+  "05-ports-adapters": {
+    "width": 653,
+    "height": 986
+  },
+  "06-dr-patterns": {
+    "width": 1035,
+    "height": 366
+  },
+  "06b-cell-ring": {
+    "width": 690,
+    "height": 333
+  },
+  "07-dr-data-strategy": {
+    "width": 667,
+    "height": 1039
+  },
+  "08-failover-sequence": {
+    "width": 1192,
+    "height": 644
+  },
+  "09-cicd-pipeline": {
+    "width": 1154,
+    "height": 607
+  },
+  "10-gitops-promotion": {
+    "width": 568,
+    "height": 1092
+  },
+  "11-agent-platform-abstraction": {
+    "width": 849,
+    "height": 1103
+  },
+  "12-context-assembly": {
+    "width": 960,
+    "height": 727
+  },
+  "13-memory-lifecycle": {
+    "width": 671,
+    "height": 795
+  },
+  "14-prompt-lifecycle": {
+    "width": 801,
+    "height": 762
+  },
+  "15-registries": {
+    "width": 913,
+    "height": 428
+  },
+  "16-apigee-gateways": {
+    "width": 779,
+    "height": 741
+  },
+  "17-temporal-approval": {
+    "width": 711,
+    "height": 1226
+  },
+  "18-plan-execute": {
+    "width": 530,
+    "height": 852
+  },
+  "19-a2a-sequence": {
+    "width": 833,
+    "height": 613
+  },
+  "20-a2a-stack": {
+    "width": 552,
+    "height": 830
+  },
+  "21-identity-flow": {
+    "width": 1048,
+    "height": 1039
+  },
+  "22-finops": {
+    "width": 782,
+    "height": 822
+  },
+  "23-arize-observability": {
+    "width": 887,
+    "height": 859
+  },
+  "24-decision-risk": {
+    "width": 979,
+    "height": 584
+  },
+  "25-rubrik-rollback": {
+    "width": 506,
+    "height": 1031
+  },
+  "26-zscaler-testing": {
+    "width": 765,
+    "height": 787
+  },
+  "27-rai-loop": {
+    "width": 995,
+    "height": 186
+  },
+  "28-credo-governance": {
+    "width": 538,
+    "height": 830
+  },
+  "29-e2e-request": {
+    "width": 1372,
+    "height": 639
+  },
+  "30-e2e-approval": {
+    "width": 1372,
+    "height": 655
+  },
+  "31-genx-capability-map": {
+    "width": 972,
+    "height": 1211
+  },
+  "32-genx-reference": {
+    "width": 1020,
+    "height": 764
+  },
+  "33-genx-onboarding": {
+    "width": 296,
+    "height": 1161
+  },
+  "34-aegisdesk-on-genx": {
+    "width": 1049,
+    "height": 782
+  },
+  "35-roadmap": {
+    "width": 981,
+    "height": 917
+  }
+}

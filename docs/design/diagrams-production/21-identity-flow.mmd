@@ -1,0 +1,21 @@
+flowchart TB
+  u["Employee"] -- "SSO (OIDC)" --> okta["Okta<br/><small>workforce identity provider</small>"]
+  okta -- "access token" --> apg["Apigee<br/><small>verifies the JWT</small>"]
+  apg --> api["AegisDesk API<br/><small>verifies the JWT, builds UserContext</small>"]
+  api --> agent["Agent<br/><small>its own identity: Okta Agent SSO · Entra Agent ID</small>"]
+  agent -- "token exchange: sub = user, act = agent, aud = tool" --> okta
+  agent -- "delegated token" --> mcp["MCP gateway → MCP server"]
+  mcp -- "scoped token (Cross App Access)" --> app["Enterprise app<br/><small>ITSM · IGA · HR</small>"]
+  wi["Workload identity<br/><small>GKE · EKS · AKS, no static keys</small>"] --- agent
+  vz["Veza<br/><small>effective access graph</small>"] -. "reads grants" .-> app
+  vz -. "reads" .-> okta
+  ax["Astrix<br/><small>NHI discovery · secrets posture</small>"] -. "monitors" .-> agent
+  class api,agent,mcp core
+  class okta,apg,vz,ax vendor
+  class wi cloud
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

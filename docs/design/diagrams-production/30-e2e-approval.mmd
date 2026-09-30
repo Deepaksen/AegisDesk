@@ -1,0 +1,20 @@
+sequenceDiagram
+  autonumber
+  participant T as Temporal workflow
+  participant Mg as Manager (Teams)
+  participant P as Policy gateway
+  participant R as Rubrik
+  participant G as MCP gateway
+  participant S as IGA (via MCP)
+  participant V as Veza
+  T->>Mg: Approval card for AR-1102
+  Mg->>T: Signal: approve (audited first)
+  T->>P: Activity: provision_access
+  Note over P: HIGH risk: approval evidence found, ALLOW
+  P->>R: Pre-action record
+  P->>G: Call with delegated token (aud = action server)
+  G->>S: Grant FinanceERP read
+  S-->>T: Granted (idempotent)
+  T->>V: Activity: verify effective access
+  V-->>T: Access matches the request
+  Note over T,Mg: Resume the conversation and notify the employee

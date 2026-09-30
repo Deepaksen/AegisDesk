@@ -1,0 +1,39 @@
+flowchart TB
+  subgraph L1["Experience and channels"]
+    direction LR
+    c1["Chat UI kit"] ~~~ c2["Teams · Gemini<br/>connectors"] ~~~ c3["A2A endpoint"] ~~~ c4["Approvals inbox"]
+  end
+  subgraph L2["Agent build and run"]
+    direction LR
+    b1["Agent templates"] ~~~ b2["Orchestration<br/>LangGraph"] ~~~ b3["Durable workflows<br/>Temporal"] ~~~ b4["Model gateway<br/>and guard"]
+  end
+  subgraph L3["Knowledge and context"]
+    direction LR
+    k1["RAG service"] ~~~ k2["Memory service"] ~~~ k3["Prompt registry"] ~~~ k4["Context assembler"]
+  end
+  subgraph L4["Tools and integration"]
+    direction LR
+    t1["MCP server SDK"] ~~~ t2["MCP registry<br/>and gateway"] ~~~ t3["Agent registry"] ~~~ t4["Enterprise<br/>connectors"]
+  end
+  subgraph L5["Trust and governance"]
+    direction LR
+    g1["Policy engine<br/>and gateway"] ~~~ g2["Identity and<br/>delegation"] ~~~ g3["Audit service"] ~~~ g4["Guardrails<br/>and rollback"]
+  end
+  subgraph L6["Operate and improve"]
+    direction LR
+    o1["Observability SDK"] ~~~ o2["Eval harness<br/>and gates"] ~~~ o3["Risk aggregation"] ~~~ o4["FinOps metering"]
+  end
+  subgraph L7["Foundation"]
+    direction LR
+    f1["Multi-cloud cells"] ~~~ f2["CI/CD templates"] ~~~ f3["IaC modules"] ~~~ f4["Secrets and keys"]
+  end
+  L1 ~~~ L2 ~~~ L3 ~~~ L4 ~~~ L5 ~~~ L6 ~~~ L7
+  class c1,c3,c4,b1,b2,b4,k1,k2,k3,k4,t1,g1,g2,g3,o1,o2,o3,o4,f2,f3 core
+  class c2,b3,t2,t3,t4,g4 vendor
+  class f1,f4 cloud
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

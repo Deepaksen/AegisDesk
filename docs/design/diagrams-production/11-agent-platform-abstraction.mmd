@@ -1,0 +1,32 @@
+flowchart LR
+  agents["AegisDesk agents<br/><small>LangGraph</small>"] --> cs["Context service port<br/><small>sessions · memory · prompts</small>"]
+  cs --> G
+  cs --> A
+  cs --> Z
+  cs --> L["Local adapter<br/><small>PostgreSQL · files<br/>tests and fallback</small>"]
+  subgraph G["Gemini Enterprise"]
+    direction LR
+    g1["Agent Engine sessions"]
+    g2["Memory Bank"]
+    g3["Prompt management"]
+  end
+  subgraph A["Bedrock AgentCore"]
+    direction LR
+    a1["Memory: short-term events"]
+    a2["Memory: long-term strategies"]
+    a3["Bedrock Prompt Management"]
+  end
+  subgraph Z["Microsoft Foundry"]
+    direction LR
+    z1["Conversations and threads"]
+    z2["Memory"]
+    z3["Agent definitions, versions"]
+  end
+  class agents,cs,L core
+  class g1,g2,g3,a1,a2,a3,z1,z2,z3 cloud
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

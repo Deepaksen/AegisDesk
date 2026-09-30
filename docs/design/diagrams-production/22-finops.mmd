@@ -1,0 +1,21 @@
+flowchart TB
+  subgraph SRC["Where the money goes"]
+    direction LR
+    t["Model tokens"] ~~~ r["Runtime · sessions<br/>memory"] ~~~ e["Egress · telemetry<br/>gateways"]
+  end
+  SRC --> meter["Metering in AegisDesk<br/><small>OTel metrics with cost labels:<br/>use case · agent · model · cloud · cost centre</small>"]
+  bills["Cloud and SaaS invoices"] --> focus["Cost data in FOCUS format"]
+  meter --> focus
+  focus --> tools["Flexera · Apptio Cloudability · Optiz"]
+  tools --> unit["Unit economics<br/><small>cost per resolved request</small>"]
+  tools --> bud["Budgets and anomaly alerts"]
+  bud -- "enforce" --> quota["Token quotas at Apigee<br/><small>model routing policy</small>"]
+  class meter,quota core
+  class tools,focus vendor
+  class t,r,e,bills muted
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

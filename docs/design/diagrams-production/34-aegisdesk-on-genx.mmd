@@ -1,0 +1,20 @@
+flowchart LR
+  subgraph OWN["AegisDesk still owns"]
+    direction TB
+    o1["Prompts"] ~~~ o2["Policy rules"] ~~~ o3["Domain tools<br/><small>MCP servers</small>"] ~~~ o4["Eval datasets"] ~~~ o5["Approval routes"]
+  end
+  OWN --> man["aegisdesk.genx.yaml<br/><small>manifest</small>"]
+  man --> gx["GenX platform"]
+  gx --> PLAT
+  subgraph PLAT["GenX provides"]
+    direction TB
+    p1["Runtime · orchestration"] ~~~ p2["Model gateway · guard"] ~~~ p3["Policy gateway · audit"] ~~~ p4["Approval workflows"] ~~~ p5["RAG · memory · prompts"] ~~~ p6["Observability · evals · FinOps"]
+  end
+  class o1,o2,o3,o4,o5 gov
+  class man,gx,p1,p2,p3,p4,p5,p6 core
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

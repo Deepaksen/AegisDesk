@@ -1,6 +1,6 @@
 # AegisDesk architecture
 
-This document describes the **target** architecture and marks what has been built so far. It is updated at every milestone. For a consolidated, diagram-rich design document, see the [High-Level Design (Word)](AegisDesk-High-Level-Design.docx) and its [diagram sources](design/).
+This document describes the **target** architecture and marks what has been built so far. It is updated at every milestone. For a consolidated, diagram-rich design document, see the [High-Level Design (Word)](AegisDesk-High-Level-Design.docx) and its [diagram sources](design/). The next stage (productionisation, multi-cloud, enterprise integrations and the GenX platform) is designed, not built, in the [Productionisation and GenX Platform Design (Word)](AegisDesk-Productionisation-and-GenX-Platform-Design.docx).
 
 | Milestone | Status |
 |---|---|

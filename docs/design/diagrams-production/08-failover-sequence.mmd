@@ -1,0 +1,18 @@
+sequenceDiagram
+  autonumber
+  participant M as Monitoring
+  participant O as On-call + runbook
+  participant D as Standby PostgreSQL
+  participant W as Temporal Cloud
+  participant S as Standby AegisDesk
+  participant T as Traffic manager
+  M->>O: Primary cloud unhealthy (probes fail, SLO burn)
+  Note over O: Declare the disaster (a human decision)
+  O->>D: Fence the old primary, promote the replica
+  Note over W: Namespace fails over (automatic with HA)
+  O->>S: Scale API and workers to full capacity
+  S->>D: Readiness: database ok
+  S->>W: Workers poll task queues · approvals continue
+  O->>T: Shift traffic to the standby cloud
+  T-->>S: User traffic
+  Note over O,T: Record the achieved RTO and RPO, then plan failback

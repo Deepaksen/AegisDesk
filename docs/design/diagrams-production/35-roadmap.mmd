@@ -1,0 +1,23 @@
+flowchart LR
+  subgraph P1["Phase 1 · Productionise"]
+    direction TB
+    a1["Okta OIDC · secrets · TLS"] --> a2["Containers on<br/>GKE · EKS · AKS"] --> a3["Managed PostgreSQL<br/>backups · replicas"] --> a4["CI/CD: build once,<br/>sign, three registries"] --> a5["Temporal for<br/>approvals"] --> a6["Arize export<br/>DR game day"]
+  end
+  subgraph P2["Phase 2 · Integrate"]
+    direction TB
+    b1["Context adapters<br/>Foundry · AgentCore · Gemini"] --> b2["Lyzr registry<br/>and deployments"] --> b3["Apigee MCP and<br/>agent gateways · A2A"] --> b4["Entra Agent ID<br/>Veza · Astrix"] --> b5["Zscaler · Rubrik<br/>Credo AI"] --> b6["FinOps metering"]
+  end
+  subgraph P3["Phase 3 · GenX"]
+    direction TB
+    c1["Extract components<br/>platform SDK"] --> c2["Templates · portal"] --> c3["AegisDesk as<br/>a manifest"] --> c4["Second and third<br/>use cases"]
+  end
+  P1 --> P2 --> P3
+  class a1,a2,a3,a4,a5,a6 core
+  class b1,b2,b3,b4,b5,b6 vendor
+  class c1,c2,c3,c4 gov
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

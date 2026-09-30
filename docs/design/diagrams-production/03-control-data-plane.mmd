@@ -1,0 +1,28 @@
+flowchart TB
+  subgraph CP["Global control plane"]
+    direction LR
+    reg["Registries<br/><small>agents · tools · owners</small>"] ~~~ pol["Policies<br/><small>rules · guardrails · budgets</small>"] ~~~ rel["Releases<br/><small>images · prompts · config</small>"]
+  end
+  subgraph G["GCP cell"]
+    direction TB
+    g1["Agents<br/><small>+ last-known config</small>"] --> g2[("Data")]
+  end
+  subgraph A["AWS cell"]
+    direction TB
+    a1["Agents<br/><small>+ last-known config</small>"] --> a2[("Data")]
+  end
+  subgraph Z["Azure cell"]
+    direction TB
+    z1["Agents<br/><small>+ last-known config</small>"] --> z2[("Data")]
+  end
+  CP -. "config, async" .-> G
+  CP -. "config, async" .-> A
+  CP -. "config, async" .-> Z
+  class reg,pol,rel gov
+  class g1,a1,z1 core
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

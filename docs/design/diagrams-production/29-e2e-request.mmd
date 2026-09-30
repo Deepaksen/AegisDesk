@@ -1,0 +1,20 @@
+sequenceDiagram
+  autonumber
+  participant E as Employee (Teams)
+  participant Z as Zscaler
+  participant A as Apigee
+  participant D as AegisDesk agents
+  participant C as Context service
+  participant M as Model (Bedrock)
+  participant P as Policy gateway
+  E->>Z: "I need access to FinanceERP"
+  Z->>A: Allowed, content inspected
+  A->>D: Okta token verified · routed to a healthy cloud
+  D->>C: Session, memories, prompt versions
+  C-->>D: Context for this user only
+  D->>M: Route and choose tools
+  M-->>D: Tool call: create_access_request
+  D->>P: Evaluate: identity, grants, risk
+  P-->>D: ALLOW (medium) · audited
+  Note over D,P: Policy requires manager approval: start the approval workflow
+  D-->>E: "AR-1102 created, waiting for your manager"

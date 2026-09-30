@@ -1,0 +1,23 @@
+flowchart TB
+  caller["Users · channels · other agents"] --> AG
+  subgraph AG["Agent gateway"]
+    direction LR
+    a1["Verify token<br/><small>Okta · Entra</small>"] ~~~ a2["Quotas<br/><small>spike arrest</small>"] ~~~ a3["Route<br/><small>A2A · REST</small>"]
+  end
+  AG --> ad["AegisDesk agents"]
+  ad --> MG
+  subgraph MG["MCP gateway"]
+    direction LR
+    m1["Verify delegated token<br/><small>aud · act</small>"] ~~~ m2["Tool-level<br/>authorization"] ~~~ m3["Logging<br/>quotas"]
+  end
+  MG --> ms["AegisDesk MCP servers<br/><small>read · action</small>"]
+  MG --> gen["Managed MCP servers<br/><small>generated from OpenAPI:<br/>ITSM · IGA · HR APIs</small>"]
+  hub["API hub · MCP registry"] -. "discover · version · govern" .-> MG
+  class ad,ms core
+  class a1,a2,a3,m1,m2,m3,gen,hub vendor
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

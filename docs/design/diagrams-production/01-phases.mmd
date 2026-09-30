@@ -1,0 +1,14 @@
+flowchart LR
+  now["<b>Today</b><br/><small>AegisDesk M0–M11<br/>one host · docker compose<br/>synthetic data</small>"]
+  p1["<b>Phase 1 · Productionise</b><br/><small>multi-cloud · disaster recovery<br/>consistent CI/CD · real identity</small>"]
+  p2["<b>Phase 2 · Integrate</b><br/><small>agent platforms · registries<br/>gateways · trust and FinOps tools</small>"]
+  p3["<b>Phase 3 · GenX platform</b><br/><small>reusable components<br/>AegisDesk runs as configuration</small>"]
+  now --> p1 --> p2 --> p3
+  class now muted
+  class p1,p2,p3 core
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

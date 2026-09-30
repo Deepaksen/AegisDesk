@@ -118,6 +118,7 @@ uv run pytest -m live         # real providers; skips any without a key or a run
 ## Documentation
 
 * [`docs/AegisDesk-High-Level-Design.docx`](docs/AegisDesk-High-Level-Design.docx): high-level design document (Word; 20 diagrams: context, architecture, data and process flows, governance, observability, evaluation, reliability, deployment, data model; decisions and patterns)
+* [`docs/AegisDesk-Productionisation-and-GenX-Platform-Design.docx`](docs/AegisDesk-Productionisation-and-GenX-Platform-Design.docx): target design and tutorial for the next stage (Word; 36 diagrams): multi-cloud deployment on Google Cloud, AWS and Azure with disaster recovery and one CI/CD pipeline, the enterprise integrations (Foundry, AgentCore, Gemini Enterprise, Lyzr, Apigee, Temporal, A2A, Okta, Entra, Veza, Astrix, FinOps tools, Arize, Rubrik, Zscaler, Credo AI), and the GenX platform
 * [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): target architecture and current state
 * [`docs/milestones/`](docs/milestones/): per-milestone learning notes
 * [`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md): agents, tools, handoffs and isolation

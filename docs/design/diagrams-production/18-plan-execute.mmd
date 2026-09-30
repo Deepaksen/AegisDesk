@@ -1,0 +1,17 @@
+flowchart TB
+  req["Request<br/><small>'Set up Priya, who joins on Monday'</small>"] --> plan["LLM planner<br/><small>structured plan: steps · tools · arguments</small>"]
+  plan --> val["Deterministic validation<br/><small>schema · policy dry run · risk total · limits</small>"]
+  val -- "high risk in plan" --> hum["Human approves the plan"]
+  val -- "within limits" --> exe
+  hum --> exe["Temporal workflow runs the steps<br/><small>each step an activity through the policy gateway</small>"]
+  exe --> prog["Progress visible<br/><small>workflow query · UI · audit</small>"]
+  exe -- "a step fails" --> saga["Saga compensation<br/><small>undo completed steps in reverse order</small>"]
+  class val,exe,prog core
+  class plan cloud
+  class saga risk
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

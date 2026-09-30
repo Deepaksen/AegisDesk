@@ -1,0 +1,24 @@
+flowchart TB
+  ly["<b>Lyzr agent registry</b><br/><small>system of record: agent, owner, purpose,<br/>versions, deployments, eval status</small>"]
+  ok["Okta · Entra Agent ID<br/><small>agent identities</small>"]
+  hub["Apigee API hub<br/><small>MCP servers and tools</small>"]
+  cr["Credo AI<br/><small>use case · risk tier · controls</small>"]
+  ar["Arize AX<br/><small>evaluation results</small>"]
+  a2a["A2A Agent Cards<br/><small>published for discovery</small>"]
+  vz["Veza<br/><small>effective access</small>"]
+  ax["Astrix<br/><small>discovered agents and NHIs</small>"]
+  ly <--> ok
+  ly <--> hub
+  ly <--> cr
+  ar --> ly
+  ly --> a2a
+  vz --> ly
+  ax -- "unregistered agent found" --> ly
+  class ly,ok,hub,cr,ar,vz,ax vendor
+  class a2a core
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

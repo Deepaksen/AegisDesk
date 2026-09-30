@@ -1,0 +1,22 @@
+flowchart LR
+  subgraph P["Primaries · serve users"]
+    gp["<b>Cell G</b> · Google Cloud"]
+    ap["<b>Cell A</b> · AWS"]
+    zp["<b>Cell Z</b> · Azure"]
+  end
+  subgraph S["Warm standbys"]
+    as["Standby of G · AWS"]
+    zs["Standby of A · Azure"]
+    gs["Standby of Z · Google Cloud"]
+  end
+  gp -. "replicate" .-> as
+  ap -. "replicate" .-> zs
+  zp -. "replicate" .-> gs
+  class gp,ap,zp core
+  class gs,as,zs muted
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

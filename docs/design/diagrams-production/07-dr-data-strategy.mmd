@@ -1,0 +1,37 @@
+flowchart LR
+  subgraph K["What AegisDesk stores"]
+    direction TB
+    d1["Audit events"]
+    d2["Approval and provisioning<br/>workflow state"]
+    d3["Access requests and<br/>other business records"]
+    d4["Conversation checkpoints"]
+    d5["Long-term memories"]
+    d6["Vector index"]
+    d7["Idempotency records"]
+  end
+  subgraph S["How it survives losing a cloud"]
+    direction TB
+    s1["Outbox to WORM object storage in two clouds<br/><small>plus Rubrik immutable backups · RPO near zero</small>"]
+    s2["Temporal Cloud multi-cloud replication<br/><small>published target: RPO under 1 min · RTO 20 min</small>"]
+    s3["Primary PostgreSQL, cross-cloud replica<br/><small>promote on failover · RPO minutes</small>"]
+    s4["Same database, lower bar<br/><small>an in-flight turn may be lost · user repeats it</small>"]
+    s5["Canonical memory store, re-hydrated per cloud<br/><small>deletions propagate everywhere</small>"]
+    s6["Rebuilt per cloud from source documents<br/><small>no replication needed</small>"]
+    s7["Region-local, short TTL<br/><small>tool idempotency keys still protect writes</small>"]
+  end
+  d1 --> s1
+  d2 --> s2
+  d3 --> s3
+  d4 --> s4
+  d5 --> s5
+  d6 --> s6
+  d7 --> s7
+  class d1,d2,d3,d4,d5,d6,d7 core
+  class s1,s2,s3 gov
+  class s4,s5,s6,s7 muted
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

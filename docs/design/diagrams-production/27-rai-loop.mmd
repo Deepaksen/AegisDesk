@@ -1,0 +1,12 @@
+flowchart LR
+  gov["<b>GOVERN</b><br/><small>Credo AI policies<br/>owners · risk tiers</small>"] --> map["<b>MAP</b><br/><small>use-case context<br/>Astrix · Veza inventory</small>"]
+  map --> mea["<b>MEASURE</b><br/><small>Arize evals · Zscaler<br/>red team · CI gates</small>"]
+  mea --> man["<b>MANAGE</b><br/><small>guardrails · approvals<br/>Rubrik rollback · kill switch</small>"]
+  man -- "lessons, new tests" --> gov
+  class gov,map,mea,man gov
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

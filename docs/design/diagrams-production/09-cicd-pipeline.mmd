@@ -1,0 +1,26 @@
+flowchart LR
+  subgraph V["1 · Verify"]
+    direction TB
+    a1["Lint · types · tests"] --> a2["Eval gates<br/><small>golden · adversarial<br/>reliability · RAG</small>"]
+  end
+  subgraph B["2 · Build once"]
+    direction TB
+    b1["Container image<br/><small>SBOM · provenance</small>"] --> b2["Scan image<br/>and dependencies"]
+  end
+  subgraph A["3 · Assure"]
+    direction TB
+    c1["Deploy to ephemeral<br/>staging"] --> c2["Zscaler red teaming<br/><small>behavioural regression</small>"] --> c3["Credo AI gate<br/><small>evidence complete?</small>"]
+  end
+  subgraph R["4 · Release"]
+    direction TB
+    d1["Sign the digest"] --> d2["Push the same digest<br/><small>GAR · ECR · ACR</small>"] --> d3["Register version<br/>in Lyzr"] --> d4["Pin digest in<br/>GitOps repo"]
+  end
+  V --> B --> A --> R
+  class a1,a2,b1,b2,c1,d1,d2,d4 core
+  class c2,c3,d3 vendor
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937
