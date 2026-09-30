@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from collections.abc import Iterator, Sequence
@@ -83,6 +84,16 @@ from aegisdesk.llm.factory import ModelConfigurationError, build_chat_model
 from aegisdesk.llm.usage import TokenUsage
 from aegisdesk.mcp_servers.catalogue import McpServerName, build_servers
 from aegisdesk.mcp_servers.server import RISK_META_KEY
+from aegisdesk.observability import faults, langsmith, tracing
+from aegisdesk.observability.logging import configure_logging
+from aegisdesk.observability.redaction import pseudonym
+from aegisdesk.observability.setup import (
+    TelemetryExporter,
+    configure_telemetry,
+    tracer_provider,
+    tree_exporter,
+)
+from aegisdesk.observability.tree import render
 from aegisdesk.persistence.factory import build_repository, open_checkpointer, psycopg_url
 from aegisdesk.prompts.loader import PromptNotFoundError, load_prompt
 from aegisdesk.rag.answer import GroundedAnswerer
@@ -209,6 +220,7 @@ def _print_run(run: AgentRun, settings: Settings, *, quiet: bool, show_steps: bo
         print(f"⏸ Waiting for approval: {steps}. Thread {run.thread_id} will resume on decision.")
     if not quiet:
         thread = f" thread_id={run.thread_id}" if run.thread_id else ""
+        thread += f" trace_id={run.trace_id}" if run.trace_id else ""
         print(
             f"  [{run.agent_name}@{run.agent_version} prompt={run.prompt_name}@"
             f"{run.prompt_version} model={settings.model_provider.value}/{settings.model_name} "
@@ -252,7 +264,8 @@ def _read_turns(prompt: str) -> Iterator[str]:
 def _login(settings: Settings, employee_id: str) -> tuple[ServiceDeskRepository, UserContext]:
     repository = build_repository(settings)
     # Simulated login. The identity is fixed here, before the model is involved.
-    return repository, authenticate(repository, employee_id)
+    with tracing.span("aegisdesk.authenticate", **{tracing.USER: pseudonym(employee_id)}):
+        return repository, authenticate(repository, employee_id)
 
 
 def _run_loop_engine(
@@ -308,6 +321,7 @@ def _run_graph_engine(
         def turn(text: str) -> None:
             run = agent.run(text, user=user, thread_id=thread_id, on_update=printer)
             _print_run(run, settings, quiet=args.quiet, show_steps=False)
+            _print_trace(run.trace_id)
 
         if args.message:
             turn(args.message)
@@ -516,6 +530,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--thread", help="thread ID to continue (graph engine); a new one if omitted")
     p.add_argument(
+        "--trace", action="store_true", help="print this run's trace as a span tree (Milestone 8)"
+    )
+    p.add_argument(
         "--tools",
         choices=[t.value for t in ToolTransport],
         default=None,
@@ -585,6 +602,8 @@ def build_parser() -> argparse.ArgumentParser:
     db_sub = db.add_subparsers(dest="db_command", required=True)
     db_sub.add_parser("init", help="migrate, create checkpoint tables, load seed rows")
     db_sub.add_parser("seed", help="load seed rows that are missing")
+
+    sub.add_parser("telemetry", help="show where traces, metrics and logs go (Milestone 8)")
 
     p = sub.add_parser("thread", help="show a stored conversation thread")
     p.add_argument("thread_id")
@@ -690,6 +709,15 @@ def cmd_audit(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_trace(trace_id: str | None) -> None:
+    """With --trace (TELEMETRY_EXPORTER=tree): the run's spans as a tree."""
+    exporter = tree_exporter()
+    if exporter is None or trace_id is None:
+        return
+    tracer_provider().force_flush()
+    print(render(exporter.spans, int(trace_id, 16)))
+
+
 def _approval_service(settings: Settings, repository: ServiceDeskRepository) -> ApprovalService:
     return ApprovalService(
         repository.access_store, build_audit_log(settings), environment=settings.aegis_env.value
@@ -756,6 +784,7 @@ def _resume_thread(
             return 0
     print(f"Resumed thread {thread_id}:")
     print(f"Assistant: {run.answer}")
+    _print_trace(run.trace_id)
     return 0
 
 
@@ -795,6 +824,36 @@ def cmd_db(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _configure_observability(settings: Settings, args: argparse.Namespace) -> Settings:
+    if getattr(args, "trace", False):
+        settings = settings.model_copy(update={"telemetry_exporter": TelemetryExporter.TREE})
+    service = "aegisdesk-mcp" if args.command == "mcp" else "aegisdesk-cli"
+    configure_logging(fmt=settings.log_format.value, level=settings.log_level)
+    configure_telemetry(
+        service_name=service,
+        exporter=settings.telemetry_exporter,
+        environment=settings.aegis_env.value,
+    )
+    return settings
+
+
+def cmd_telemetry(settings: Settings, _args: argparse.Namespace) -> int:
+    """Where telemetry goes, without printing any secret."""
+    report = {
+        "service": "aegisdesk-cli",
+        "exporter": settings.telemetry_exporter.value,
+        "otlp_endpoint": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "(SDK default)"),
+        "otlp_headers": "set" if os.environ.get("OTEL_EXPORTER_OTLP_HEADERS") else "not set",
+        "log_format": settings.log_format.value,
+        "log_level": settings.log_level,
+        "langsmith": "on" if langsmith.enabled() else "off",
+        "langsmith_project": os.environ.get("LANGSMITH_PROJECT", "(default)"),
+        "faults": os.environ.get(faults.ENV) or "none",
+    }
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 COMMANDS = {
     "config": cmd_config,
     "chat": cmd_chat,
@@ -809,14 +868,26 @@ COMMANDS = {
     "policy": cmd_policy,
     "audit": cmd_audit,
     "approvals": cmd_approvals,
+    "telemetry": cmd_telemetry,
     "db": cmd_db,
 }
+
+
+def _one_shot(args: argparse.Namespace) -> bool:
+    if args.command == "agent":
+        return bool(args.message)  # interactive sessions: one trace per turn instead
+    return args.command in {"approvals", "ask", "thread"}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return COMMANDS[args.command](get_settings(), args)
+        settings = _configure_observability(get_settings(), args)
+        if _one_shot(args):
+            # One trace for the whole command: authentication, the run, the resume.
+            with tracing.span(f"aegisdesk.cli {args.command}"):
+                return COMMANDS[args.command](settings, args)
+        return COMMANDS[args.command](settings, args)
     except AuthenticationError as exc:
         print(f"Login failed: {exc}", file=sys.stderr)
         return 2

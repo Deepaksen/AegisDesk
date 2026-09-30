@@ -45,7 +45,8 @@ from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import UserContext
 from aegisdesk.identity.tokens import TOKEN_META_KEY, TokenIssuer
 from aegisdesk.mcp_servers.catalogue import McpServerName
-from aegisdesk.tools.executor import OutcomeStatus, ToolOutcome
+from aegisdesk.observability import faults, propagation, tracing
+from aegisdesk.tools.executor import OutcomeStatus, ToolOutcome, record_tool_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -267,13 +268,28 @@ class RemoteToolRunner:
                 thread_id=thread_id,
             )
             try:
-                result = self._connection.call_tool(
-                    self._server,
-                    name,
-                    args,
-                    meta={TOKEN_META_KEY: token},
-                    timeout_seconds=self._timeout,
-                )
+                with tracing.span(
+                    f"mcp.call {self._server}/{name}",
+                    **{
+                        "rpc.system": "mcp",
+                        "rpc.method": "tools/call",
+                        tracing.TOOL_NAME: name,
+                        "aegisdesk.mcp.server": str(self._server),
+                        "aegisdesk.mcp.attempt": attempt,
+                    },
+                ) as call_span:
+                    try:
+                        _inject_faults(self._server, name)
+                        result = self._connection.call_tool(
+                            self._server,
+                            name,
+                            args,
+                            meta=propagation.inject({TOKEN_META_KEY: token}),
+                            timeout_seconds=self._timeout,
+                        )
+                    except ToolTransportError as exc:
+                        tracing.mark_error(call_span, exc.category)
+                        raise
             except ToolTransportError as exc:
                 logger.warning(
                     "MCP %s: %s attempt %d/%d failed: %s (request_id=%s)",
@@ -286,9 +302,19 @@ class RemoteToolRunner:
                 )
                 if attempt < attempts and exc.category in {"timeout", "unavailable"}:
                     continue
-                return error(exc.category, str(exc))
+                failed = error(exc.category, str(exc))
+                # The server never ran the tool, so this is the only place to count it.
+                record_tool_metrics(failed)
+                return failed
             return _to_outcome(result, outcome)
         raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _inject_faults(server: McpServerName, tool: str) -> None:
+    if faults.active("tool_timeout", tool):
+        raise ToolTransportError("timeout", f"The {server} tool server did not answer in time.")
+    if faults.active("mcp_unavailable", str(server)):
+        raise ToolTransportError("unavailable", f"The {server} tool server is unavailable.")
 
 
 def _to_outcome(

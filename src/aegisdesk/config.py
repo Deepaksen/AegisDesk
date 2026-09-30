@@ -16,7 +16,11 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field, SecretStr
+
+__all__ = ["TelemetryExporter"]  # re-exported for settings users
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from aegisdesk.observability.setup import TelemetryExporter
 
 # Repository root: src/aegisdesk/config.py -> parents[2]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +52,11 @@ class VectorStoreKind(StrEnum):
 class AuditStoreKind(StrEnum):
     MEMORY = "memory"  # per process; tests and demos
     POSTGRES = "postgres"  # append-only audit_events table (migration 0002)
+
+
+class LogFormat(StrEnum):
+    TEXT = "text"
+    JSON = "json"  # one JSON object per line, with trace_id / request_id / thread_id
 
 
 class DataStoreKind(StrEnum):
@@ -131,6 +140,12 @@ class Settings(BaseSettings):
     data_store: DataStoreKind = DataStoreKind.MEMORY
     checkpoint_store: CheckpointStoreKind = CheckpointStoreKind.SQLITE
     approval_ttl_hours: int = Field(default=168, ge=1, le=24 * 90)
+
+    # Observability (Milestone 8). OTLP endpoint and headers use the standard
+    # OTEL_EXPORTER_OTLP_* variables; LangSmith uses LANGSMITH_TRACING/_API_KEY/_PROJECT.
+    telemetry_exporter: TelemetryExporter = TelemetryExporter.NONE
+    log_format: LogFormat = LogFormat.TEXT
+    log_level: str = Field(default="WARNING", pattern=r"^(DEBUG|INFO|WARNING|ERROR)$")
 
 
 @lru_cache(maxsize=1)

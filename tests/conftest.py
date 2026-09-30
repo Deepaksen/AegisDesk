@@ -12,6 +12,7 @@ from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.governance.factory import build_gateway
 from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.identity.context import UserContext, authenticate
+from aegisdesk.observability import faults
 from aegisdesk.prompts.loader import Prompt, load_prompt
 from aegisdesk.rag.embeddings import HashingEmbedder
 from aegisdesk.rag.ingestion.pipeline import ingest_directory
@@ -50,6 +51,12 @@ _MODEL_ENV_VARS = (
     "DATA_STORE",
     "CHECKPOINT_STORE",
     "APPROVAL_TTL_HOURS",
+    "TELEMETRY_EXPORTER",
+    "LOG_FORMAT",
+    "LOG_LEVEL",
+    "AEGIS_FAULTS",
+    "LANGSMITH_TRACING",
+    "LANGSMITH_API_KEY",
 )
 
 
@@ -65,8 +72,10 @@ def _isolate_env(
         # Ignore any local .env file for deterministic tests.
         monkeypatch.setitem(Settings.model_config, "env_file", None)
     get_settings.cache_clear()
+    faults.reload()
     yield
     get_settings.cache_clear()
+    faults.reload()
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-# Local infrastructure. Grows milestone by milestone (OPA, MCP servers, observability, UI...).
+# Local infrastructure. Grows milestone by milestone (MCP servers, UI...).
 #
 #   docker compose up -d postgres
 #   DATABASE_URL=postgresql+psycopg://aegisdesk:aegisdesk@localhost:5432/aegisdesk uv run aegisdesk db init
@@ -20,5 +20,52 @@ services:
       timeout: 3s
       retries: 10
 
+  # --- Observability (Milestone 8): docker compose --profile observability up -d
+  # Then: TELEMETRY_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+  # Grafana http://localhost:3000 (dashboard "AegisDesk overview"; anonymous viewer).
+  otel-collector:
+    profiles: [observability]
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./infra/observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4318:4318"  # OTLP/HTTP from the apps
+      - "8889:8889"  # Prometheus scrape endpoint
+    depends_on: [tempo]
+
+  tempo:
+    profiles: [observability]
+    image: grafana/tempo:2.6.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./infra/observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on: [otel-collector]
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:11.2.2
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer  # local development only
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus, tempo]
+
 volumes:
   postgres-data:
+  tempo-data:

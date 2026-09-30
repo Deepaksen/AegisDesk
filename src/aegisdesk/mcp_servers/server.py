@@ -30,6 +30,8 @@ from mcp.server import Server
 
 from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.identity.tokens import TOKEN_META_KEY, TokenError, TokenVerifier
+from aegisdesk.observability import propagation, tracing
+from aegisdesk.observability.redaction import pseudonym
 from aegisdesk.tools.base import ToolAccess, ToolSpec
 from aegisdesk.tools.executor import OutcomeStatus, ToolExecutor
 
@@ -90,20 +92,32 @@ def build_tool_server(
             logger.warning("mcp %s: rejected call to %s: %s", name, params.name, exc)
             return _error("unauthenticated", str(exc))
 
-        outcome = executor.execute(
-            params.name,
-            dict(params.arguments or {}),
-            user=caller.user,
-            request_id=caller.request_id,
-            thread_id=caller.thread_id,
-            agent=caller.agent,
-        )
+        # Continue the client's trace (traceparent in _meta): one trace across processes.
+        with tracing.remote_child_span(
+            propagation.extract(meta),
+            f"mcp.server {params.name}",
+            **{
+                "rpc.system": "mcp",
+                "rpc.method": "tools/call",
+                tracing.TOOL_NAME: params.name,
+                "aegisdesk.mcp.server": name,
+                tracing.REQUEST_ID: caller.request_id,
+            },
+        ):
+            outcome = executor.execute(
+                params.name,
+                dict(params.arguments or {}),
+                user=caller.user,
+                request_id=caller.request_id,
+                thread_id=caller.thread_id,
+                agent=caller.agent,
+            )
         # Who did what, on whose behalf, independent of the conversation.
         logger.info(
             "mcp %s: tool=%s user=%s agent=%s@%s env=%s request_id=%s status=%s%s",
             name,
             params.name,
-            caller.user.employee_id,
+            pseudonym(caller.user.employee_id),  # the audit trail has the real ID
             caller.agent.agent_id,
             caller.agent.agent_version,
             caller.agent.environment,

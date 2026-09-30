@@ -18,9 +18,11 @@ framework-level recursion limit as a second backstop.
 
 from __future__ import annotations
 
+import dataclasses
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -52,6 +54,10 @@ from aegisdesk.agents.loop import (
 from aegisdesk.graphs.state import ServiceDeskState, claims_from, context_from
 from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.usage import TokenUsage
+from aegisdesk.observability import langsmith, tracing
+from aegisdesk.observability.logging import log_context
+from aegisdesk.observability.metrics import instruments
+from aegisdesk.observability.redaction import pseudonym
 from aegisdesk.prompts.loader import Prompt
 from aegisdesk.tools.executor import OutcomeStatus, ToolRunner
 
@@ -105,8 +111,25 @@ def build_tool_agent_graph(
         # The system prompt is added here, at call time, not stored in the thread.
         messages = [SystemMessage(content=prompt.system), *state["messages"]]
         started = time.perf_counter()
-        reply = model_with_tools.invoke(messages)
-        usage = TokenUsage.from_message(reply)
+        model_attrs = tracing.model_attributes(model)
+        with tracing.span(
+            f"chat {model_attrs.get(tracing.MODEL) or ''}".strip(),
+            **{tracing.OPERATION: "chat", tracing.PROMPT: f"{prompt.name}@{prompt.version}"},
+            **model_attrs,
+        ) as llm_span:
+            reply = model_with_tools.invoke(messages)
+            usage = TokenUsage.from_message(reply)
+            tracing.record_llm_call(
+                llm_span,
+                model=model_attrs,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                seconds=time.perf_counter() - started,
+                agent=prompt.name,
+            )
+            llm_span.set_attribute(
+                "aegisdesk.requested_tools", [c["name"] for c in reply.tool_calls]
+            )
         step = state["llm_calls"] + 1
         entry = {
             "kind": "model",
@@ -289,11 +312,14 @@ class ThreadedGraphAgent:
             "user": claims_from(user),
             "request_id": request_id,
         }
-        before = len(self.graph.get_state(self._config(thread_id)).values.get("messages", []))
-        for node, update in self._stream(turn_input, thread_id):
-            if on_update is not None:
-                on_update(node, update)
-        return self._result(thread_id, request_id, started, first_new=before + 1)
+        with self._observed(
+            "aegisdesk.request", request_id=request_id, thread_id=thread_id, user=user
+        ) as observe:
+            before = len(self.graph.get_state(self._config(thread_id)).values.get("messages", []))
+            for node, update in self._stream(turn_input, thread_id, request_id):
+                if on_update is not None:
+                    on_update(node, update)
+            return observe(self._result(thread_id, request_id, started, first_new=before + 1))
 
     def resume(self, thread_id: str, *, on_update: UpdateCallback | None = None) -> AgentRun:
         """Continue a thread paused for approval (Milestone 7).
@@ -310,12 +336,70 @@ class ThreadedGraphAgent:
         before = len(snapshot.values.get("messages", []))
         # The value is informational only; the nodes re-read the approval store.
         command: Command[Any] = Command(resume={"event": "approval_decided"})
-        for chunk in self.graph.stream(command, self._config(thread_id), stream_mode="updates"):
-            for node, update in chunk.items():
-                if on_update is not None and node != "__interrupt__":
-                    on_update(node, update or {})
         request_id = str(snapshot.values.get("request_id", ""))
-        return self._result(thread_id, request_id, started, first_new=before)
+        with self._observed(
+            "aegisdesk.resume", request_id=request_id, thread_id=thread_id, user=None
+        ) as observe:
+            config = self._run_config(thread_id, request_id)
+            for chunk in self.graph.stream(command, config, stream_mode="updates"):
+                for node, update in chunk.items():
+                    if on_update is not None and node != "__interrupt__":
+                        on_update(node, update or {})
+            return observe(self._result(thread_id, request_id, started, first_new=before))
+
+    @contextmanager
+    def _observed(
+        self, name: str, *, request_id: str, thread_id: str, user: UserContext | None
+    ) -> Iterator[Callable[[AgentRun], AgentRun]]:
+        """Root span + request metrics + log context for one run (Milestone 8)."""
+        labels = {"agent": self.name, "operation": name.rsplit(".", 1)[-1]}
+        attributes = {
+            tracing.REQUEST_ID: request_id,
+            tracing.THREAD_ID: thread_id,
+            tracing.AGENT_NAME: self.name,
+            tracing.AGENT_VERSION: self.version,
+            tracing.PROMPT: f"{self._prompt.name}@{self._prompt.version}",
+            tracing.USER: pseudonym(user.employee_id) if user else None,
+        }
+        started = time.perf_counter()
+        m = instruments()
+        with (
+            tracing.span(name, **attributes) as root,
+            log_context(request_id=request_id, thread_id=thread_id, agent=self.name),
+        ):
+
+            def finish(run: AgentRun) -> AgentRun:
+                root.set_attribute(tracing.GRAPH_STEPS, len(run.trajectory))
+                root.set_attribute(tracing.STATUS, run.stop_reason.value)
+                if run.pending_approvals:
+                    root.set_attribute(
+                        "aegisdesk.approval.pending",
+                        [p["approval_id"] for p in run.pending_approvals],
+                    )
+                return dataclasses.replace(run, trace_id=tracing.current_trace_id())
+
+            try:
+                yield finish
+            except Exception:
+                m.requests_failed.add(1, labels)
+                raise
+            finally:
+                m.requests.add(1, labels)
+                m.task_latency.record(time.perf_counter() - started, labels)
+
+    def _run_config(self, thread_id: str, request_id: str) -> RunnableConfig:
+        """Config for a run: LangSmith metadata and (optional) tracer callbacks."""
+        config = self._config(thread_id)
+        config["metadata"] = {
+            "agent": self.name,
+            "agent_version": self.version,
+            "prompt": f"{self._prompt.name}@{self._prompt.version}",
+            "request_id": request_id,
+            "thread_id": thread_id,
+        }
+        config["tags"] = [f"agent:{self.name}", f"agent_version:{self.version}"]
+        config["callbacks"] = langsmith.callbacks()
+        return config
 
     def pending_approvals(self, thread_id: str) -> list[dict[str, Any]]:
         snapshot = self.graph.get_state(self._config(thread_id))
@@ -351,9 +435,12 @@ class ThreadedGraphAgent:
             pending_approvals=self.pending_approvals(thread_id),
         )
 
-    def _stream(self, turn_input: dict[str, Any], thread_id: str) -> Iterator[tuple[str, Any]]:
+    def _stream(
+        self, turn_input: dict[str, Any], thread_id: str, request_id: str
+    ) -> Iterator[tuple[str, Any]]:
         # stream_mode="updates" yields {node_name: update} after each node finishes.
-        for chunk in self.graph.stream(turn_input, self._config(thread_id), stream_mode="updates"):
+        config = self._run_config(thread_id, request_id)
+        for chunk in self.graph.stream(turn_input, config, stream_mode="updates"):
             for node, update in chunk.items():
                 if node == "__interrupt__":  # a pause, reported via pending_approvals
                     continue

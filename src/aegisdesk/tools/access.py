@@ -27,6 +27,7 @@ from aegisdesk.domain.access import (
     evaluate_eligibility,
 )
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.observability.metrics import instruments
 from aegisdesk.tools.base import (
     NotFoundError,
     ToolAccess,
@@ -236,6 +237,9 @@ def build_access_tools(repository: ServiceDeskRepository) -> list[ToolSpec[Any, 
             thread_id=ctx.thread_id,
         )
         steps = repository.access_store.approvals_for_request(request.request_id)
+        if created:
+            for step in steps:
+                instruments().approval_requests.add(1, {"step": step.step.value})
         next_step = (
             "Waiting for approval: "
             + "; ".join(

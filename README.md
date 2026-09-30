@@ -16,6 +16,7 @@ All data is synthetic.
 | M5 MCP ✅ | Enterprise tools behind a read and an action MCP server (in-process or Streamable HTTP); per-call signed delegation tokens carry user, agent, request ID and server audience; discovery with risk annotations; timeouts, read-only retries, no write retries; local vs remote comparison | [M5](docs/milestones/M5-mcp.md) |
 | M6 Governance ✅ | Action gateway on every tool call (host and MCP servers): deterministic policy from `config/policy.yaml` (agent grants, risk classes, authorized writes, forbidden actions, environments), fail-closed; append-only audit events in PostgreSQL (UPDATE/DELETE/TRUNCATE rejected); deliberate bypass attempts tested | [M6](docs/milestones/M6-governance.md) |
 | M7 Human approval ✅ | Sensitive access requests pause the LangGraph workflow (`interrupt`), survive restarts (PostgreSQL access store + checkpointer), and resume on the approver's decision; approver rules with separation of duties, expiry and idempotency; provisioning only by the workflow identity with gateway-verified approval evidence; audited end to end | [M7](docs/milestones/M7-approvals.md) |
+| M8 Observability ✅ | OpenTelemetry traces (one trace per request, across MCP servers) with GenAI attributes, the spec's metrics, JSON logs with trace context, optional LangSmith, allowlist redaction; Collector + Tempo + Prometheus + Grafana dashboard (docker compose profile); `--trace` span trees; injected faults for debugging | [M8](docs/milestones/M8-observability.md) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
@@ -53,6 +54,11 @@ uv run aegisdesk db init                                            # migrations
 uv run aegisdesk agent --as E1004 "Please create an access request for FinanceERP for month-end reporting"
 uv run aegisdesk approvals list --as E1010
 uv run aegisdesk approvals approve AP-0001 --as E1010 --comment "ok"   # resumes the employee's thread
+
+# Observability (M8)
+uv run aegisdesk agent --as E1004 --trace "What laptop is assigned to me?"   # span tree, no infrastructure
+LOG_FORMAT=json AEGIS_FAULTS=tool_error:get_my_assets uv run aegisdesk agent --as E1004 --trace "What laptop is assigned to me?"
+docker compose --profile observability up -d && export TELEMETRY_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 
 # Governance (M6)
 uv run aegisdesk policy check --as E1004 --agent knowledge --tool create_ticket   # DENY + reasons

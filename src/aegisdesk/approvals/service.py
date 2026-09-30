@@ -35,6 +35,9 @@ from aegisdesk.domain.access import (
 )
 from aegisdesk.domain.access_store import AccessStore, is_expired
 from aegisdesk.identity.context import UserContext
+from aegisdesk.observability import tracing
+from aegisdesk.observability.metrics import instruments
+from aegisdesk.observability.redaction import pseudonym
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +111,37 @@ class ApprovalService:
         comment: str | None = None,
         request_id: str | None = None,
     ) -> DecisionResult:
+        with tracing.span(
+            "approval.decide",
+            **{
+                "aegisdesk.approval.id": approval_id,
+                "aegisdesk.approval.decision": "approve" if approve else "reject",
+                tracing.USER: pseudonym(approver.employee_id),
+            },
+        ) as current:
+            try:
+                result = self._decide(
+                    approval_id, approver, approve=approve, comment=comment, request_id=request_id
+                )
+            except ApprovalError as exc:
+                tracing.mark_error(current, exc.category)
+                raise
+            current.set_attribute("aegisdesk.approval.changed", result.changed)
+            current.set_attribute(tracing.THREAD_ID, result.approval.thread_id or "")
+            current.set_attribute("aegisdesk.access_request.status", result.request.status.value)
+            if result.changed and not approve:
+                instruments().approval_rejections.add(1, {"reason": "rejected"})
+            return result
+
+    def _decide(
+        self,
+        approval_id: str,
+        approver: UserContext,
+        *,
+        approve: bool,
+        comment: str | None,
+        request_id: str | None,
+    ) -> DecisionResult:
         wanted = ApprovalStatus.APPROVED if approve else ApprovalStatus.REJECTED
         approval = self._store.get_approval(approval_id)
         if approval is None or not self._may_view(approval, approver):
@@ -151,13 +185,13 @@ class ApprovalService:
     def refresh(self, request_id: str) -> AccessRequest:
         """Expire overdue steps and settle the request's status. Safe to call repeatedly."""
         for approval in self._store.approvals_for_request(request_id):
-            if is_expired(approval):
-                self._store.decide_approval(
-                    approval.approval_id,
-                    status=ApprovalStatus.EXPIRED,
-                    decided_by=None,
-                    comment="Expired without a decision.",
-                )
+            if is_expired(approval) and self._store.decide_approval(
+                approval.approval_id,
+                status=ApprovalStatus.EXPIRED,
+                decided_by=None,
+                comment="Expired without a decision.",
+            ):
+                instruments().approval_rejections.add(1, {"reason": "expired"})
         steps = self._store.approvals_for_request(request_id)
         waiting = AccessRequestStatus.AWAITING_APPROVAL
         if any(a.status in (ApprovalStatus.REJECTED, ApprovalStatus.EXPIRED) for a in steps):
@@ -185,6 +219,7 @@ class ApprovalService:
             phase=AuditPhase.OUTCOME,
             call_id=str(uuid.uuid4()),
             request_id=request_id or f"approval-{uuid.uuid4()}",
+            trace_id=tracing.current_trace_id(),
             thread_id=approval.thread_id,
             user_id=approval.requester_id,
             agent_id=None,  # a human decision, not an agent action

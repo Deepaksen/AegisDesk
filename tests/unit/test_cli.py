@@ -209,3 +209,25 @@ def test_agent_shows_the_pause(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["agent", "--as", "E1004", "--quiet", message]) == 0
     out = capsys.readouterr().out
     assert "⏸ Waiting for approval: AP-0001 (manager: E1010)" in out
+
+
+def test_agent_trace_prints_the_span_tree(capsys: pytest.CaptureFixture[str]) -> None:
+    assert (
+        main(["agent", "--as", "E1004", "--quiet", "--trace", "What laptop is assigned to me?"])
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "aegisdesk.request" in out and "execute_tool get_my_assets" in out
+
+
+def test_telemetry_check_prints_no_secrets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_should_not_appear")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer should-not-appear")
+
+    assert main(["telemetry"]) == 0
+    out = capsys.readouterr().out
+    assert "should-not-appear" not in out and "lsv2_should_not_appear" not in out
+    report = json.loads(out)
+    assert report["exporter"] == "none" and report["otlp_headers"] == "set"

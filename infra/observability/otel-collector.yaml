@@ -1,0 +1,40 @@
+# OpenTelemetry Collector: the one place applications send telemetry to.
+# Apps -> OTLP/HTTP :4318 -> traces to Tempo, metrics exposed for Prometheus (:8889).
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+  # Second redaction layer (the first is RedactingSpanProcessor in the app):
+  # never forward prompt or completion content, whatever an instrumentation adds.
+  attributes/redact:
+    actions:
+      - pattern: ^gen_ai\.(prompt|completion).*
+        action: delete
+      - key: enduser.id
+        action: delete
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Keep resource attributes such as service.name as labels.
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [attributes/redact, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]

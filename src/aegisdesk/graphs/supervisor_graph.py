@@ -59,6 +59,9 @@ from aegisdesk.agents.loop import StopReason
 from aegisdesk.graphs.state import ServiceDeskState, context_from
 from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.usage import TokenUsage
+from aegisdesk.observability import tracing
+from aegisdesk.observability.logging import log_context
+from aegisdesk.observability.metrics import instruments
 from aegisdesk.prompts.loader import Prompt
 from aegisdesk.schemas.routing import RoutingPlan
 from aegisdesk.tools.handoff import HANDOFF_TOOL, AgentName
@@ -199,11 +202,29 @@ def build_supervisor_graph(
         plan: list[dict[str, Any]] = []
         out_of_scope = False
         usage = TokenUsage()
+        model_attrs = tracing.model_attributes(router_model)
+        route_span = tracing.span(
+            f"chat {model_attrs.get(tracing.MODEL) or ''}".strip(),
+            **{
+                tracing.OPERATION: "chat",
+                tracing.PROMPT: f"{router_prompt.name}@{router_prompt.version}",
+            },
+            **model_attrs,
+        )
         try:
-            result = cast(dict[str, Any], router.invoke(messages))
-            raw = result.get("raw")
-            if isinstance(raw, AIMessage):
-                usage = TokenUsage.from_message(raw)
+            with route_span as llm_span:
+                result = cast(dict[str, Any], router.invoke(messages))
+                raw = result.get("raw")
+                if isinstance(raw, AIMessage):
+                    usage = TokenUsage.from_message(raw)
+                tracing.record_llm_call(
+                    llm_span,
+                    model=model_attrs,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    seconds=time.perf_counter() - started,
+                    agent="router",
+                )
             parsed = result.get("parsed")
             if result.get("parsing_error") is not None or not isinstance(parsed, RoutingPlan):
                 error = f"invalid routing output: {result.get('parsing_error')}"
@@ -278,10 +299,17 @@ def build_supervisor_graph(
             note: str | None = None
             sub_trajectory: list[dict[str, Any]] = []
             sub: dict[str, Any] = {}
+            instruments().agent_invocations.add(1, {"agent": name.value})
+            agent_span = tracing.span(
+                f"invoke_agent {name.value}",
+                **{tracing.OPERATION: "invoke_agent", tracing.AGENT_NAME: name.value},
+            )
             try:
-                sub = specialist.graph.invoke(
-                    sub_input, {"recursion_limit": specialist.recursion_limit}
-                )
+                with agent_span as current, log_context(agent=name.value):
+                    sub = specialist.graph.invoke(
+                        sub_input, {"recursion_limit": specialist.recursion_limit}
+                    )
+                    current.set_attribute(tracing.STATUS, str(sub.get("stop_reason")))
                 sub_trajectory = [dict(e, agent=name.value) for e in sub.get("trajectory", [])]
                 answer = sub["messages"][-1].text
                 status = (
@@ -373,10 +401,14 @@ def build_supervisor_graph(
     def await_approval(state: SupervisorState) -> dict[str, Any]:
         workflow = _require(approvals)
         requests = state["approval_requests"]
-        if workflow.waiting(requests):
+        with tracing.span("approval.await", **{"aegisdesk.approval.requests": requests}) as current:
+            waiting = workflow.waiting(requests)
+            pending = workflow.pending(requests) if waiting else []
+            current.set_attribute("aegisdesk.approval.pending", [p["approval_id"] for p in pending])
+        if waiting:
             # Pause the thread. The checkpointer has saved the state; the process may exit.
             # The resume value is ignored: only the approval store says what was decided.
-            interrupt({"access_requests": requests, "pending": workflow.pending(requests)})
+            interrupt({"access_requests": requests, "pending": pending})
         return {}
 
     def after_await(state: SupervisorState) -> str:
@@ -388,12 +420,15 @@ def build_supervisor_graph(
 
     def apply_approvals(state: SupervisorState, config: RunnableConfig) -> dict[str, Any]:
         workflow = _require(approvals)
-        settled = workflow.settle(
-            state["approval_requests"],
-            user=context_from(state["user"]),
-            request_id=state["request_id"],
-            thread_id=(config.get("configurable") or {}).get("thread_id"),
-        )
+        with tracing.span(
+            "approval.apply", **{"aegisdesk.approval.requests": state["approval_requests"]}
+        ):
+            settled = workflow.settle(
+                state["approval_requests"],
+                user=context_from(state["user"]),
+                request_id=state["request_id"],
+                thread_id=(config.get("configurable") or {}).get("thread_id"),
+            )
         return {
             "messages": [AIMessage(content=m) for m in settled.messages],
             "trajectory": [*state["trajectory"], *settled.trajectory],

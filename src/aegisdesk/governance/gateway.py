@@ -41,6 +41,8 @@ from aegisdesk.governance.policy import (
 )
 from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import UserContext
+from aegisdesk.observability import tracing
+from aegisdesk.observability.metrics import instruments
 from aegisdesk.tools.base import ToolAccess, ToolRisk
 
 logger = logging.getLogger(__name__)
@@ -93,23 +95,33 @@ class ActionGateway:
         request_id: str,
         thread_id: str | None = None,
     ) -> Authorization:
-        evidence = None
-        if self.approvals is not None:
-            # From the store, keyed by the validated arguments; nothing the caller asserts.
-            evidence = self.approvals.evidence(tool=tool, args=args, user=user)
-        decision = self.policy.evaluate(
-            PolicyInput(
-                tool=tool,
-                user=user,
-                agent=agent,
-                environment=self.environment,
-                approval=evidence,
+        with tracing.span("policy.evaluate", **{tracing.TOOL_NAME: tool}) as current:
+            evidence = None
+            if self.approvals is not None:
+                # From the store, keyed by the validated arguments; nothing the caller asserts.
+                evidence = self.approvals.evidence(tool=tool, args=args, user=user)
+            decision = self.policy.evaluate(
+                PolicyInput(
+                    tool=tool,
+                    user=user,
+                    agent=agent,
+                    environment=self.environment,
+                    approval=evidence,
+                )
             )
-        )
+            current.set_attribute("aegisdesk.policy.decision", decision.decision.value)
+            current.set_attribute("aegisdesk.policy.reasons", list(decision.reasons))
+            current.set_attribute("aegisdesk.policy.version", decision.policy_version)
+            if evidence is not None:
+                current.set_attribute("aegisdesk.approval.ids", list(evidence.approval_ids))
+        if decision.decision is Decision.DENY:
+            for reason in decision.reasons:
+                instruments().policy_denials.add(1, {"tool": tool, "reason": reason})
         event = AuditEvent(
             phase=AuditPhase.DECISION,
             call_id=str(uuid.uuid4()),
             request_id=request_id,
+            trace_id=tracing.current_trace_id(),
             thread_id=thread_id,
             user_id=user.employee_id,
             agent_id=agent.agent_id if agent else None,

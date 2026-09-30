@@ -37,6 +37,8 @@ from pydantic import BaseModel, ValidationError
 from aegisdesk.governance.policy import Decision
 from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import UserContext
+from aegisdesk.observability import faults, tracing
+from aegisdesk.observability.metrics import instruments
 from aegisdesk.tools.base import ToolAccess, ToolCallContext, ToolError, ToolSpec
 
 if TYPE_CHECKING:
@@ -124,6 +126,14 @@ class CompositeToolRunner:
         return runner.execute(name, args, user=user, request_id=request_id, thread_id=thread_id)
 
 
+def record_tool_metrics(outcome: ToolOutcome) -> None:
+    m = instruments()
+    m.tool_calls.add(1, {"tool": outcome.tool_name, "status": outcome.status.value})
+    m.tool_latency.record(outcome.latency_ms / 1000, {"tool": outcome.tool_name})
+    if outcome.error_category:
+        m.tool_errors.add(1, {"tool": outcome.tool_name, "category": outcome.error_category})
+
+
 def idempotency_key(user_id: str, request_id: str, tool_name: str, args: BaseModel) -> str:
     """Same user + same request + same tool + same validated arguments -> same key.
 
@@ -177,6 +187,35 @@ class ToolExecutor:
         request_id: str,
         thread_id: str | None = None,
         agent: AgentIdentity | None = None,
+    ) -> ToolOutcome:
+        acting = agent or self._agent
+        with tracing.span(
+            f"execute_tool {name}",
+            **{
+                tracing.OPERATION: "execute_tool",
+                tracing.TOOL_NAME: name,
+                tracing.AGENT_NAME: acting.agent_id if acting else None,
+            },
+        ) as current:
+            outcome = self._execute(
+                name, args, user=user, request_id=request_id, thread_id=thread_id, agent=agent
+            )
+            current.set_attribute(tracing.STATUS, outcome.status.value)
+            if outcome.error_category:
+                tracing.mark_error(current, outcome.error_category)
+        # Counted here, where the tool actually runs (on the MCP server for remote tools).
+        record_tool_metrics(outcome)
+        return outcome
+
+    def _execute(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None,
+        agent: AgentIdentity | None,
     ) -> ToolOutcome:
         started = time.perf_counter()
 
@@ -245,7 +284,10 @@ class ToolExecutor:
         )
 
         try:
-            output = spec.handler(parsed, context)
+            with tracing.span("tool.handler", **{tracing.TOOL_NAME: name}):
+                if faults.active("tool_error", name):
+                    raise faults.InjectedFaultError(f"injected tool_error for {name}")
+                output = spec.handler(parsed, context)
         except ToolError as exc:
             return error(exc.category, str(exc))
         except Exception:

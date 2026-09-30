@@ -134,6 +134,8 @@ class AgentRun:
     thread_id: str | None = None
     # Approval steps the thread is paused on (Milestone 7); empty when not paused.
     pending_approvals: list[dict[str, Any]] = field(default_factory=list)
+    # The OpenTelemetry trace of this run (Milestone 8): joins logs, audit events, spans.
+    trace_id: str | None = None
 
     @property
     def awaiting_approval(self) -> bool:

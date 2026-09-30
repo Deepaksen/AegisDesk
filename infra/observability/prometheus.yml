@@ -1,0 +1,8 @@
+# Prometheus scrapes the metrics the collector exposes (converted from OTLP).
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]

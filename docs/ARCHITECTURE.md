@@ -12,7 +12,7 @@ This document describes the **target** architecture and marks what has been buil
 | M5 MCP | ✅ built ([notes](milestones/M5-mcp.md), [design](MCP_DESIGN.md)) |
 | M6 Governance | ✅ built ([notes](milestones/M6-governance.md), [design](GOVERNANCE_DESIGN.md)) |
 | M7 Human approval | ✅ built ([notes](milestones/M7-approvals.md), [design](APPROVALS_DESIGN.md)) |
-| M8 Observability | not started |
+| M8 Observability | ✅ built ([notes](milestones/M8-observability.md), [design](OBSERVABILITY.md)) |
 | M9 Evaluations | not started |
 | M10 API + UI | not started |
 | M11 Reliability | not started |
@@ -57,7 +57,19 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M7
+## What exists after M8
+
+### Observability
+
+```
+spans · metrics · JSON logs ──(RedactingSpanProcessor)──► OTLP ─► Collector ─┬─► Tempo ──┐
+     one trace per request, across MCP (traceparent in _meta)               └─► Prometheus┴─► Grafana
+     trace_id also in audit_events                         optional: LangSmith (redacted)
+```
+
+* **Observability** (`src/aegisdesk/observability/`, `infra/observability/`): OpenTelemetry spans at every seam (request, router/model calls, specialists, tools, policy, MCP client and server, retrieval, approvals) with GenAI semantic-convention attributes; the §24 metrics; JSON logs with trace context; optional LangSmith; allowlist redaction; injected faults for debugging practice. See [OBSERVABILITY.md](OBSERVABILITY.md) and [ADR 0013](adr/0013-opentelemetry-langsmith-redaction.md).
+
+From M7:
 
 ### Approval workflow
 
@@ -213,7 +225,7 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `persistence/` | `src/aegisdesk/persistence/` (checkpointer) | M2 |
 | `migrations/` | `migrations/` (Alembic), `alembic.ini` | M3 |
 | `approvals/` | `src/aegisdesk/approvals/` | M7 |
-| `observability/`, `infrastructure/` | … | M8 |
+| `observability/`, `infrastructure/` | `src/aegisdesk/observability/`, `infra/observability/` (+ Grafana dashboards) | M8 |
 | `evals/` | `evals/datasets/` (data), `src/aegisdesk/evals/` (evaluators) | M3 (retrieval); M9 (full suite) |
 | `apps/api`, `apps/ui` | … | M10 |
 
