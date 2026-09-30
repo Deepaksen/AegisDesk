@@ -41,9 +41,12 @@ from aegisdesk.agents.loop import (
     TOOL_LIMIT_ANSWER,
     AgentLimits,
     AgentRun,
+    AgentStep,
     ModelStep,
+    RouteStep,
     StopReason,
     ToolStep,
+    TrajectoryStep,
 )
 from aegisdesk.graphs.state import ServiceDeskState, claims_from, context_from
 from aegisdesk.identity.context import UserContext
@@ -64,14 +67,20 @@ class ThreadAccessError(PermissionError):
     """The thread exists but belongs to another employee."""
 
 
-def build_service_desk_graph(
+def build_tool_agent_graph(
     *,
     model: BaseChatModel,
     prompt: Prompt,
     executor: ToolExecutor,
     limits: AgentLimits,
-    checkpointer: BaseCheckpointSaver[Any] | None,
+    checkpointer: BaseCheckpointSaver[Any] | bool | None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
+    """A tool-calling agent as a graph. Used standalone (M2) and as a specialist subgraph (M4).
+
+    `checkpointer=False` compiles a subgraph that never checkpoints on its own,
+    not even by inheriting its parent's checkpointer: the parent graph persists
+    only what the specialist *returns*, never its private scratch messages.
+    """
     model_with_tools = model.bind_tools(executor.model_definitions())
 
     # -- nodes: plain functions from state to a partial state update ----------
@@ -201,38 +210,38 @@ def _not_executed(call_id: str, name: str) -> ToolMessage:
     )
 
 
-class ServiceDeskGraphAgent:
-    """Runs turns of a persisted conversation (a *thread*) through the graph."""
+# The M2 name, kept for readers following the milestones in order.
+build_service_desk_graph = build_tool_agent_graph
+
+
+class ThreadedGraphAgent:
+    """Runs turns of a persisted conversation (a *thread*) through a compiled graph.
+
+    Works for any graph whose state has the shared keys of `ServiceDeskState`
+    (messages, owner_id, user, request_id, counters, stop_reason, trajectory):
+    the single Service Desk agent (M2) and the multi-agent supervisor (M4).
+    """
 
     def __init__(
         self,
         *,
         name: str,
         version: str,
-        model: BaseChatModel,
         prompt: Prompt,
-        executor: ToolExecutor,
-        limits: AgentLimits,
-        checkpointer: BaseCheckpointSaver[Any],
+        graph: CompiledStateGraph[Any, Any, Any, Any],
+        recursion_limit: int,
     ) -> None:
         self.name = name
         self.version = version
         self._prompt = prompt
-        self._limits = limits
-        self.graph = build_service_desk_graph(
-            model=model,
-            prompt=prompt,
-            executor=executor,
-            limits=limits,
-            checkpointer=checkpointer,
-        )
+        self.graph = graph
+        # Our own limits stop the run first; this is LangGraph's backstop.
+        self._recursion_limit = recursion_limit
 
     def _config(self, thread_id: str) -> RunnableConfig:
-        # Each model call and each tool round is one superstep, plus start/limit.
-        # Our own limits stop the run first; this is LangGraph's backstop.
         return {
             "configurable": {"thread_id": thread_id},
-            "recursion_limit": 2 * self._limits.max_steps + 4,
+            "recursion_limit": self._recursion_limit,
         }
 
     def history(self, thread_id: str, user: UserContext) -> list[BaseMessage]:
@@ -295,20 +304,71 @@ class ServiceDeskGraphAgent:
                 yield node, update or {}
 
 
-def step_from_entry(entry: dict[str, Any]) -> ModelStep | ToolStep:
-    if entry["kind"] == "model":
-        return ModelStep(
-            step=entry["step"],
-            usage=TokenUsage(entry["input_tokens"], entry["output_tokens"]),
-            latency_ms=entry["latency_ms"],
-            requested_tools=tuple(entry["requested_tools"]),
+class ServiceDeskGraphAgent(ThreadedGraphAgent):
+    """The single Service Desk agent (Milestone 2) with persisted threads."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        version: str,
+        model: BaseChatModel,
+        prompt: Prompt,
+        executor: ToolExecutor,
+        limits: AgentLimits,
+        checkpointer: BaseCheckpointSaver[Any],
+    ) -> None:
+        super().__init__(
+            name=name,
+            version=version,
+            prompt=prompt,
+            graph=build_tool_agent_graph(
+                model=model,
+                prompt=prompt,
+                executor=executor,
+                limits=limits,
+                checkpointer=checkpointer,
+            ),
+            # Each model call and each tool round is one superstep, plus start/limit.
+            recursion_limit=2 * limits.max_steps + 4,
         )
-    return ToolStep(
-        step=entry["step"],
-        tool_name=entry["tool_name"],
-        args=entry["args"],
-        status=OutcomeStatus(entry["status"]),
-        latency_ms=entry["latency_ms"],
-        error_category=entry["error_category"],
-        result=entry["result"],
-    )
+
+
+def step_from_entry(entry: dict[str, Any]) -> TrajectoryStep:
+    agent = entry.get("agent")
+    match entry["kind"]:
+        case "model":
+            return ModelStep(
+                step=entry["step"],
+                usage=TokenUsage(entry["input_tokens"], entry["output_tokens"]),
+                latency_ms=entry["latency_ms"],
+                requested_tools=tuple(entry["requested_tools"]),
+                agent=agent,
+            )
+        case "tool":
+            return ToolStep(
+                step=entry["step"],
+                tool_name=entry["tool_name"],
+                args=entry["args"],
+                status=OutcomeStatus(entry["status"]),
+                latency_ms=entry["latency_ms"],
+                error_category=entry["error_category"],
+                result=entry["result"],
+                agent=agent,
+            )
+        case "route":
+            return RouteStep(
+                tasks=tuple((t["agent"], t["instruction"]) for t in entry["tasks"]),
+                out_of_scope=entry["out_of_scope"],
+                error=entry.get("error"),
+                usage=TokenUsage(entry["input_tokens"], entry["output_tokens"]),
+                latency_ms=entry["latency_ms"],
+            )
+        case _:
+            return AgentStep(
+                agent=entry["agent"],
+                instruction=entry["instruction"],
+                status=entry["status"],
+                answer=entry["answer"],
+                note=entry.get("note"),
+            )

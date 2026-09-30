@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,8 @@ from aegisdesk.rag.embeddings import HashingEmbedder
 from aegisdesk.rag.ingestion.pipeline import ingest_directory
 from aegisdesk.rag.retrieval.retriever import Retriever
 from aegisdesk.rag.store.memory import InMemoryVectorStore
+
+TODAY = date(2026, 9, 30)
 
 # Env vars that would otherwise leak from a developer's shell or .env into tests.
 _MODEL_ENV_VARS = (
@@ -27,6 +30,7 @@ _MODEL_ENV_VARS = (
     "OLLAMA_BASE_URL",
     "AGENT_MAX_STEPS",
     "AGENT_MAX_TOOL_CALLS",
+    "AGENT_MAX_HANDOFFS",
     "EMBEDDING_PROVIDER",
     "EMBEDDING_MODEL",
     "VECTOR_STORE",
@@ -64,8 +68,11 @@ def assistant_prompt() -> Prompt:
 
 @pytest.fixture
 def repository() -> ServiceDeskRepository:
-    """A fresh in-memory repository per test, so writes never leak between tests."""
-    return ServiceDeskRepository.from_seed(PROJECT_ROOT / "data" / "seed")
+    """A fresh in-memory repository per test, so writes never leak between tests.
+
+    "Today" is pinned so access-expiry rules give the same answer on any date.
+    """
+    return ServiceDeskRepository.from_seed(PROJECT_ROOT / "data" / "seed", today=lambda: TODAY)
 
 
 @pytest.fixture

@@ -8,5 +8,6 @@
   {"employee_id": "E1010", "name": "Grace Liu", "email": "grace.liu@northstar.example", "department": "finance", "title": "Finance Manager", "roles": ["employee", "manager"], "manager_id": null, "status": "active"},
   {"employee_id": "E1011", "name": "Omar Haddad", "email": "omar.haddad@northstar.example", "department": "sales", "title": "Sales Manager", "roles": ["employee", "manager"], "manager_id": null, "status": "active"},
   {"employee_id": "E1012", "name": "Sofia Rossi", "email": "sofia.rossi@northstar.example", "department": "engineering", "title": "Engineering Manager", "roles": ["employee", "manager"], "manager_id": null, "status": "active"},
-  {"employee_id": "E1013", "name": "Kenji Watanabe", "email": "kenji.watanabe@northstar.example", "department": "it", "title": "IT Service Manager", "roles": ["employee", "manager", "it_admin"], "manager_id": null, "status": "active"}
+  {"employee_id": "E1013", "name": "Kenji Watanabe", "email": "kenji.watanabe@northstar.example", "department": "it", "title": "IT Service Manager", "roles": ["employee", "manager", "it_admin"], "manager_id": null, "status": "active"},
+  {"employee_id": "E1014", "name": "Nora Petersen", "email": "nora.petersen@northstar.example", "department": "hr", "title": "HR Systems Administrator", "roles": ["employee", "hr_admin"], "manager_id": null, "status": "active"}
 ]

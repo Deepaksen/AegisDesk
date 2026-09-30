@@ -54,9 +54,22 @@ def test_agent_single_request_prints_trajectory_and_answer(
     assert main(["agent", "--as", "E1004", "What laptop is assigned to me?"]) == 0
 
     out = capsys.readouterr().out
-    assert "tool   get_my_assets({}) ok" in out
+    assert "→ router" in out and "service_desk: 'What laptop is assigned to me?'" in out
+    assert "[service_desk] step 1 tool   get_my_assets({}) ok" in out
+    assert "← service_desk done" in out
     assert "Assistant: [fake model] Tool results:" in out
     assert "NS-LT-0101" in out
+    # 1 routing call + 2 specialist calls
+    assert "supervisor@0.1.0 prompt=router@v1" in out
+    assert "stop=final_answer llm_calls=3 tool_calls=1" in out
+
+
+def test_single_agent_graph_engine_is_still_available(capsys: pytest.CaptureFixture[str]) -> None:
+    assert (
+        main(["agent", "--as", "E1004", "--engine", "graph", "What laptop is assigned to me?"]) == 0
+    )
+    out = capsys.readouterr().out
+    assert "  · step 1 tool   get_my_assets({}) ok" in out
     assert "stop=final_answer llm_calls=2 tool_calls=1" in out
 
 
@@ -90,7 +103,9 @@ def test_agent_thread_resumes_across_invocations(capsys: pytest.CaptureFixture[s
     out = capsys.readouterr().out
     assert "human: What laptop is assigned to me?" in out
     assert "human: Show me ticket INC-1001" in out
-    assert "get_ticket" in out
+    assert "INC-1001" in out
+    # Context isolation: the thread keeps visible turns only, not specialists' tool traffic.
+    assert "tool:" not in out
 
 
 def test_thread_of_another_employee_is_refused(capsys: pytest.CaptureFixture[str]) -> None:

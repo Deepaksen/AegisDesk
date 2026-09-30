@@ -7,6 +7,7 @@
     aegisdesk agent --as E1004 "What laptop is assigned to me?"
     aegisdesk agent --as E1004               interactive session (LangGraph, persisted)
     aegisdesk agent --as E1004 --thread T1 "..."   continue a stored thread, even after restart
+    aegisdesk agent --as E1004 --engine graph "..." the single Service Desk agent (M2/M3)
     aegisdesk agent --as E1004 --engine loop "..." the Milestone 1 hand-written loop
     aegisdesk thread T1 --as E1004           show a stored thread
     aegisdesk rag ingest                     build the knowledge-base index
@@ -32,16 +33,28 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import ValidationError
 
-from aegisdesk.agents.loop import AgentRun, ModelStep, ToolStep
+from aegisdesk.agents.loop import (
+    AgentRun,
+    AgentStep,
+    ModelStep,
+    RouteStep,
+    TrajectoryStep,
+)
 from aegisdesk.agents.service_desk import (
     DEFAULT_PROMPT_VERSION,
     build_service_desk_agent,
     build_service_desk_graph_agent,
 )
+from aegisdesk.agents.supervisor import build_supervisor_agent
 from aegisdesk.config import PROJECT_ROOT, Settings, VectorStoreKind, get_settings
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
-from aegisdesk.graphs.service_desk_graph import NODE_START, ThreadAccessError, step_from_entry
+from aegisdesk.graphs.service_desk_graph import (
+    NODE_START,
+    ThreadAccessError,
+    ThreadedGraphAgent,
+    step_from_entry,
+)
 from aegisdesk.identity.context import AuthenticationError, UserContext, authenticate
 from aegisdesk.llm.allowlist import ModelNotAllowedError
 from aegisdesk.llm.client import CallMetadata, LLMClient, StructuredOutputError
@@ -130,16 +143,31 @@ def cmd_repeat(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _format_step(step: ModelStep | ToolStep) -> str:
+def _format_step(step: TrajectoryStep) -> str:
+    if isinstance(step, RouteStep):
+        if step.error:
+            decision = f"routing failed ({step.error})"
+        elif step.out_of_scope:
+            decision = "out of scope"
+        else:
+            decision = ", ".join(f"{agent}: {instr!r}" for agent, instr in step.tasks)
+        return (
+            f"→ router  in={step.usage.input_tokens} out={step.usage.output_tokens} "
+            f"{step.latency_ms:.0f}ms -> {decision}"
+        )
+    if isinstance(step, AgentStep):
+        note = f" [{step.note}]" if step.note else ""
+        return f"← {step.agent} {step.status}{note}"
+    who = f"[{step.agent}] " if step.agent else ""
     if isinstance(step, ModelStep):
         wants = ", ".join(step.requested_tools) or "final answer"
         return (
-            f"  · step {step.step} model  in={step.usage.input_tokens} "
+            f"  · {who}step {step.step} model  in={step.usage.input_tokens} "
             f"out={step.usage.output_tokens} {step.latency_ms:.0f}ms -> {wants}"
         )
     detail = f" ({step.error_category})" if step.error_category else ""
     return (
-        f"  · step {step.step} tool   {step.tool_name}({json.dumps(step.args)}) "
+        f"  · {who}step {step.step} tool   {step.tool_name}({json.dumps(step.args)}) "
         f"{step.status.value}{detail} {step.latency_ms:.1f}ms"
     )
 
@@ -226,9 +254,13 @@ def _run_graph_engine(
 ) -> int:
     thread_id = args.thread or str(uuid.uuid4())
     with sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer:
-        agent = build_service_desk_graph_agent(
-            settings, repository, checkpointer=checkpointer, prompt_version=args.prompt_version
-        )
+        agent: ThreadedGraphAgent
+        if args.engine == "multi":
+            agent = build_supervisor_agent(settings, repository, checkpointer=checkpointer)
+        else:
+            agent = build_service_desk_graph_agent(
+                settings, repository, checkpointer=checkpointer, prompt_version=args.prompt_version
+            )
         printer = None if args.quiet else _StepPrinter()
 
         def turn(text: str) -> None:
@@ -433,9 +465,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true", help="print only the answer")
     p.add_argument(
         "--engine",
-        choices=["graph", "loop"],
-        default="graph",
-        help="graph: LangGraph with persisted threads (default); loop: the M1 hand-written loop",
+        choices=["multi", "graph", "loop"],
+        default="multi",
+        help=(
+            "multi: supervisor + specialist agents (default); graph: the single Service Desk "
+            "agent (M2/M3); loop: the M1 hand-written loop"
+        ),
     )
     p.add_argument("--thread", help="thread ID to continue (graph engine); a new one if omitted")
 

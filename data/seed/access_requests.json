@@ -1,0 +1,14 @@
+[
+  {"request_id": "AR-1001", "employee_id": "E1001", "application_id": "APP-GH", "status": "approved", "approvals_required": ["manager"], "created_at": "2024-11-01T09:00:00Z", "justification": "New engineer onboarding."},
+  {"request_id": "AR-1002", "employee_id": "E1002", "application_id": "APP-SF", "status": "auto_approved", "approvals_required": [], "created_at": "2025-01-20T10:00:00Z", "justification": "Sales account management."},
+  {"request_id": "AR-1003", "employee_id": "E1005", "application_id": "APP-GH", "status": "approved", "approvals_required": ["manager"], "created_at": "2026-02-01T08:30:00Z", "justification": "Contract development work."},
+  {"request_id": "AR-1004", "employee_id": "E1001", "application_id": "APP-FIN", "status": "rejected", "approvals_required": ["manager"], "created_at": "2026-03-05T14:12:00Z", "justification": "Want to look at budgets."},
+  {"request_id": "AR-1005", "employee_id": "E1006", "application_id": "APP-PDB", "status": "approved", "approvals_required": ["manager", "security"], "created_at": "2026-09-29T07:40:00Z", "justification": "Investigate INC-0993 data issue."},
+  {"request_id": "AR-1006", "employee_id": "E1011", "application_id": "APP-AH", "status": "approved", "approvals_required": ["data_owner"], "created_at": "2024-02-08T11:00:00Z", "justification": "Sales pipeline dashboards."},
+  {"request_id": "AR-1007", "employee_id": "E1012", "application_id": "APP-PDB", "status": "awaiting_approval", "approvals_required": ["manager", "security"], "created_at": "2026-09-28T16:20:00Z", "justification": "Migration dry run."},
+  {"request_id": "AR-1008", "employee_id": "E1010", "application_id": "APP-FIN", "status": "approved", "approvals_required": ["manager"], "created_at": "2023-08-30T09:00:00Z", "justification": "Finance manager role."},
+  {"request_id": "AR-1009", "employee_id": "E1004", "application_id": "APP-AH", "status": "approved", "approvals_required": ["data_owner"], "created_at": "2025-03-10T10:10:00Z", "justification": "Monthly reporting."},
+  {"request_id": "AR-1010", "employee_id": "E1002", "application_id": "APP-HR", "status": "rejected", "approvals_required": ["manager", "security"], "created_at": "2026-01-12T13:00:00Z", "justification": "Check holiday balances."},
+  {"request_id": "AR-1011", "employee_id": "E1013", "application_id": "APP-PDB", "status": "awaiting_approval", "approvals_required": ["manager", "security"], "created_at": "2026-09-30T06:05:00Z", "justification": "P1 follow-up."},
+  {"request_id": "AR-1012", "employee_id": "E1014", "application_id": "APP-HR", "status": "approved", "approvals_required": ["manager", "security"], "created_at": "2025-03-30T09:00:00Z", "justification": "HR systems administration."}
+]

@@ -8,7 +8,7 @@ This document describes the **target** architecture and marks what has been buil
 | M1 Single agent + local tools | ✅ built ([notes](milestones/M1-single-agent-tools.md)) |
 | M2 LangGraph | ✅ built ([notes](milestones/M2-langgraph.md)) |
 | M3 RAG | ✅ built ([notes](milestones/M3-rag.md), [design](RAG_DESIGN.md)) |
-| M4 Multi-agent | not started |
+| M4 Multi-agent | ✅ built ([notes](milestones/M4-multi-agent.md), [design](AGENT_DESIGN.md)) |
 | M5 MCP | not started |
 | M6 Governance | not started |
 | M7 Human approval | not started |
@@ -57,7 +57,32 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M3
+## What exists after M4
+
+### Multi-agent topology (default engine)
+
+```
+aegisdesk agent --as E1004 --thread T "..."
+   │  authenticate() → UserContext · thread ownership check · SQLite checkpointer (visible turns only)
+   ▼
+start_turn → classify_request ──(LLM: RoutingPlan{tasks, out_of_scope})──► supervisor (code, no tools)
+                                                               Command(goto) │  ▲
+          ┌─────────────────────────┬────────────────────────────┬──────────┘  │ back after each task
+          ▼                         ▼                            ▼             │
+   knowledge subgraph        service_desk subgraph         access subgraph ────┘
+   search, retrieve_doc,     assets, tickets,              profile, my access, application,
+   handoff                   create_ticket, search,        eligibility, create_access_request,
+   + citation check (code)   handoff                       handoff (eligibility recomputed)
+          │                         │                            │
+          └──── each: its own prompt, its own ToolExecutor, its own state ─────┘
+                                   │
+                              respond (1 answer → as is; several → sections joined by code)
+```
+
+* **Agents** (`src/aegisdesk/agents/supervisor.py`, `graphs/supervisor_graph.py`): see [AGENT_DESIGN.md](AGENT_DESIGN.md) and [ADR 0007](adr/0007-specialised-agents-deterministic-supervisor.md). Tool sets are fixed per agent. Handoffs are requests to the supervisor, bounded by a budget. Specialist context is isolated.
+* **Access domain** (`domain/access.py`, `tools/access.py`): deterministic eligibility; requests are recorded as `awaiting_approval` or `auto_approved`, and never granted by an agent.
+
+### Single-agent engine (M2/M3, kept for comparison: `--engine graph`)
 
 ```
 aegisdesk agent --as E1004 --thread T "..."
@@ -134,7 +159,7 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `tools/` | `src/aegisdesk/tools/` | M1 |
 | `identity/` | `src/aegisdesk/identity/` (simulated login; OIDC later) | M1 |
 | `data/seed/` | `data/seed/` | M1 |
-| `graphs/`, `agents/` | `src/aegisdesk/graphs/`, `src/aegisdesk/agents/` | M1–M2 (M4 adds more agents) |
+| `graphs/`, `agents/` | `src/aegisdesk/graphs/`, `src/aegisdesk/agents/` | M1–M2; supervisor + specialists M4 |
 | `rag/` | `src/aegisdesk/rag/`; documents in `data/documents/` | M3 |
 | `mcp_servers/` | `src/aegisdesk/mcp_servers/` | M5 |
 | `governance/` | `src/aegisdesk/governance/` | M6 |

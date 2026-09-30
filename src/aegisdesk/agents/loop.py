@@ -73,6 +73,7 @@ class ModelStep:
     usage: TokenUsage
     latency_ms: float
     requested_tools: tuple[str, ...]
+    agent: str | None = None  # which specialist made the call (multi-agent runs)
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,32 @@ class ToolStep:
     latency_ms: float
     error_category: str | None
     result: str
+    agent: str | None = None
+
+
+@dataclass(frozen=True)
+class RouteStep:
+    """The supervisor's routing decision (multi-agent runs)."""
+
+    tasks: tuple[tuple[str, str], ...]  # (agent, instruction)
+    out_of_scope: bool
+    error: str | None
+    usage: TokenUsage
+    latency_ms: float
+
+
+@dataclass(frozen=True)
+class AgentStep:
+    """One specialist's piece of work, as the supervisor sees it (multi-agent runs)."""
+
+    agent: str
+    instruction: str
+    status: str  # done | incomplete | failed
+    answer: str
+    note: str | None = None
+
+
+TrajectoryStep = ModelStep | ToolStep | RouteStep | AgentStep
 
 
 @dataclass(frozen=True)
@@ -97,7 +124,7 @@ class AgentRun:
     request_id: str
     answer: str
     stop_reason: StopReason
-    trajectory: list[ModelStep | ToolStep]
+    trajectory: list[TrajectoryStep]
     # The conversation without the system prompt, including this turn;
     # pass it back as `history` for the next turn.
     history: list[BaseMessage]
@@ -108,7 +135,7 @@ class AgentRun:
 
     @property
     def llm_calls(self) -> int:
-        return sum(isinstance(s, ModelStep) for s in self.trajectory)
+        return sum(isinstance(s, ModelStep | RouteStep) for s in self.trajectory)
 
     @property
     def tool_steps(self) -> list[ToolStep]:
@@ -149,7 +176,7 @@ class ToolCallingAgent:
             *(history or []),
             HumanMessage(content=user_input),
         ]
-        trajectory: list[ModelStep | ToolStep] = []
+        trajectory: list[TrajectoryStep] = []
         usage = TokenUsage()
         tool_calls_made = 0
 

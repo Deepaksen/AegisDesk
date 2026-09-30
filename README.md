@@ -12,6 +12,7 @@ All data is synthetic.
 | M1 Single agent + tools ✅ | Service Desk agent with a hand-written tool-calling loop; tools for own assets and tickets and for ticket creation; trusted identity; idempotent writes; security tests | [M1](docs/milestones/M1-single-agent-tools.md) |
 | M2 LangGraph ✅ | The same agent as an explicit LangGraph graph: typed state, nodes, conditional edges, SQLite checkpointing (threads survive restarts), per-node streaming, thread ownership | [M2](docs/milestones/M2-langgraph.md) |
 | M3 RAG ✅ | 12-document knowledge base; chunking, embeddings (offline hashing or Ollama), in-memory and PostgreSQL + pgvector stores, access filtering before ranking, grounded answers with verified citations, knowledge tools for the agent, retrieval eval gate | [M3](docs/milestones/M3-rag.md) |
+| M4 Multi-agent ✅ | Supervisor with a structured router and deterministic dispatch; Knowledge, Service Desk and Access specialists as subgraphs with isolated tools and context; bounded handoffs; code-checked citations; access domain with deterministic eligibility (requests recorded, never granted) | [M4](docs/milestones/M4-multi-agent.md) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
@@ -28,11 +29,13 @@ uv run aegisdesk chat "How do I clear my DNS cache?"
 uv run aegisdesk triage "My VPN drops every 10 minutes" --show-messages
 uv run aegisdesk repeat "Suggest a name for a new laptop" --runs 5 --temperature 1.0
 
-# Service Desk agent (simulated login as a synthetic employee)
+# Agents (simulated login as a synthetic employee); default engine: supervisor + specialists
 uv run aegisdesk agent --as E1004 "What laptop is assigned to me?"   # prints a thread_id
+uv run aegisdesk agent --as E1004 "Please create an access request for FinanceERP for month-end reporting"
 uv run aegisdesk agent --as E1004 --thread <id> "Show me ticket INC-1001"  # continue, even after restart
 uv run aegisdesk thread <id> --as E1004      # read a stored conversation
 uv run aegisdesk agent --as E1004            # interactive session
+uv run aegisdesk agent --as E1004 --engine graph "..."  # the single Service Desk agent (M2/M3)
 uv run aegisdesk agent --as E1004 --engine loop "..."   # the M1 hand-written loop
 
 # Knowledge base (RAG)
@@ -43,7 +46,7 @@ uv run aegisdesk eval rag                                            # retrieval
 
 For a persistent pgvector index: `docker compose up -d postgres`, set `DATABASE_URL` and `VECTOR_STORE=pgvector`, then run `uv run alembic upgrade head` and `uv run aegisdesk rag ingest`. For semantic embeddings: `ollama pull nomic-embed-text` and `EMBEDDING_PROVIDER=ollama`.
 
-Synthetic users include `E1004` (finance), `E1001` (engineering), `E1005` (contractor), `E1006` (IT admin), `E1010` (manager) and `E1007` (terminated, so login is refused). See [`data/seed/`](data/seed/).
+Synthetic users include `E1004` (finance), `E1001` (engineering), `E1005` (contractor), `E1006` (IT admin), `E1010` (finance manager), `E1014` (HR admin) and `E1007` (terminated, so login is refused). See [`data/seed/`](data/seed/).
 
 ### Choosing a model
 
@@ -55,7 +58,7 @@ Set these in `.env` or your shell. Models must be listed in [`config/models.yaml
 | Anthropic | `MODEL_PROVIDER=anthropic` `MODEL_NAME=claude-haiku-4-5-20251001` (or `claude-sonnet-5-5`) `ANTHROPIC_API_KEY=…` |
 | Ollama (local) | `ollama pull llama3.2`, then `MODEL_PROVIDER=ollama` `MODEL_NAME=llama3.2` (or `qwen2.5:7b`) |
 
-Also available: `MODEL_TEMPERATURE`, `MODEL_MAX_TOKENS`, `MODEL_TIMEOUT_SECONDS`, `MODEL_MAX_RETRIES`, `OLLAMA_BASE_URL`, `AGENT_MAX_STEPS`, `AGENT_MAX_TOOL_CALLS`, `CHECKPOINT_DB_PATH` (default `.aegisdesk/checkpoints.sqlite`), and the RAG settings in [`.env.example`](.env.example).
+Also available: `MODEL_TEMPERATURE`, `MODEL_MAX_TOKENS`, `MODEL_TIMEOUT_SECONDS`, `MODEL_MAX_RETRIES`, `OLLAMA_BASE_URL`, `AGENT_MAX_STEPS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_MAX_HANDOFFS`, `CHECKPOINT_DB_PATH` (default `.aegisdesk/checkpoints.sqlite`), and the RAG settings in [`.env.example`](.env.example).
 
 ## Development
 
@@ -72,5 +75,6 @@ uv run pytest -m live         # real providers; skips any without a key or a run
 
 * [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): target architecture and current state
 * [`docs/milestones/`](docs/milestones/): per-milestone learning notes
+* [`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md): agents, tools, handoffs and isolation
 * [`docs/RAG_DESIGN.md`](docs/RAG_DESIGN.md): knowledge base and retrieval design
 * [`docs/adr/`](docs/adr/): architecture decision records
