@@ -1,0 +1,11 @@
+flowchart TB
+  in["PolicyInput<br/><small>tool · user · agent identity · environment ·<br/>approval evidence · writes in request</small>"] --> chk["Collect deny reasons<br/><small>unclassified_tool · unknown_agent · environment_mismatch ·<br/>agent_not_authorized_for_tool · forbidden_action ·<br/>write_not_authorized · not_approved_for_environment ·<br/>missing_role · write_budget_exceeded</small>"]
+  chk --> agg{"any reason?"}
+  agg -->|"yes"| D["<b>DENY</b> + reasons"]
+  agg -->|"no"| h{"HIGH risk?"}
+  h -->|"no"| AL["<b>ALLOW</b>"]
+  h -->|"yes + recorded approval"| AL
+  h -->|"yes, no evidence"| RA["<b>REQUIRE_APPROVAL</b>"]
+  D --> V["decision + policy_version → audit (before acting)"]
+  AL --> V
+  RA --> V

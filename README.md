@@ -117,6 +117,7 @@ uv run pytest -m live         # real providers; skips any without a key or a run
 
 ## Documentation
 
+* [`docs/AegisDesk-High-Level-Design.docx`](docs/AegisDesk-High-Level-Design.docx): high-level design document (Word; 20 diagrams: context, architecture, data and process flows, governance, observability, evaluation, reliability, deployment, data model; decisions and patterns)
 * [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): target architecture and current state
 * [`docs/milestones/`](docs/milestones/): per-milestone learning notes
 * [`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md): agents, tools, handoffs and isolation

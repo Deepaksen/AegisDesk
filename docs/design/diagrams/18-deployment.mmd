@@ -1,0 +1,16 @@
+flowchart TB
+  env[".env<br/><small>MCP_TOKEN_SECRET · model settings</small>"]
+  pg[("postgres (pgvector/pg16) :5432")] -->|"service_healthy"| mig["migrate · one-shot<br/><small>db init · rag ingest</small>"]
+  mig -->|"completed_successfully"| mcp["mcp · :8765 internal<br/><small>aegisdesk mcp serve</small>"]
+  mcp -->|"service_healthy"| api["api · :8000<br/><small>aegisdesk api serve · healthcheck /ready</small>"]
+  api -->|"service_healthy"| ui["ui · :8501<br/><small>streamlit</small>"]
+  subgraph obs["--profile observability"]
+    direction LR
+    col["otel-collector"] --> tempo["tempo"]
+    col --> prom["prometheus"]
+    prom --> graf["grafana :3000"]
+  end
+  env -.-> mcp
+  env -.-> api
+  api -.-> col
+  prom -.->|"scrape /metrics"| api

@@ -1,0 +1,12 @@
+flowchart TB
+  r["Message with Idempotency-Key k"] --> b{"begin(user, k,<br/>fingerprint)"}
+  b -->|"REPLAY"| rp["stored response<br/><small>Idempotent-Replayed: true</small>"]
+  b -->|"IN_PROGRESS / MISMATCH"| cx["409 in progress /<br/>422 key reused"]
+  b -->|"NEW"| run["run turn<br/><small>request_id = idem-hash(user, k)</small>"]
+  run --> wb{"write budget left?<br/><small>(3 per request)</small>"}
+  wb -->|"no"| deny["DENY<br/>write_budget_exceeded"]
+  wb -->|"yes"| ik["create_ticket with tool key<br/><small>(user, request, tool, args):<br/>existing INC or new INC</small>"]
+  ik --> done{"turn result"}
+  deny --> done
+  done -->|"success"| comp["complete(k, response)"]
+  done -->|"5xx / outage"| rel["release(k)<br/><small>retry really runs</small>"]

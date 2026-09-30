@@ -1,0 +1,20 @@
+flowchart TB
+  S((START)) --> st["start_turn<br/><small>reset counters, bind owner</small>"]
+  st --> cl["classify_request<br/><small>router model → RoutingPlan<br/>(structured output, guarded)</small>"]
+  cl --> sv{"supervisor<br/><small>deterministic dispatch</small>"}
+  sv -->|"next pending task"| kn["knowledge<br/><small>subgraph</small>"]
+  sv -->|"next pending task"| sd["service_desk<br/><small>subgraph</small>"]
+  sv -->|"next pending task"| ac["access<br/><small>subgraph</small>"]
+  kn --> sv
+  sd --> sv
+  ac --> sv
+  sv -->|"no tasks / routing error /<br/>model outage"| rs["respond<br/><small>deterministic combine, no new facts</small>"]
+  rs -->|"no access requests"| E((END))
+  rs -->|"access requests created"| aw["await_approval<br/><small>interrupt(): checkpoint & pause</small>"]
+  aw -. "resume after human decision" .-> aw
+  aw -->|"all decided"| ap["apply_approvals<br/><small>provision via workflow identity</small>"]
+  ap --> E
+  classDef det fill:#E8F7EE,stroke:#2E7D32
+  classDef llm fill:#FFF4E5,stroke:#C77700
+  class st,sv,rs,aw,ap det
+  class cl,kn,sd,ac llm

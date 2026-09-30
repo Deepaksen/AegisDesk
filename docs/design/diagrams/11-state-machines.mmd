@@ -1,0 +1,22 @@
+stateDiagram-v2
+  direction LR
+  state "Access request" as AR {
+    [*] --> awaiting_approval: create (approvals required)
+    [*] --> auto_approved: create (standard app)
+    awaiting_approval --> approved: every step approved
+    awaiting_approval --> rejected: any step rejected / expired
+    approved --> provisioned: provision_access (sets provisioned_at)
+    auto_approved --> provisioned: provision_access (sets provisioned_at)
+    approved --> approved: provisioning failed → reconcile
+    rejected --> [*]
+    provisioned --> [*]
+  }
+  state "Approval step" as AP {
+    [*] --> pending
+    pending --> approved_step: approve (right approver)
+    pending --> rejected_step: reject
+    pending --> expired: TTL passed
+    approved_step --> [*]
+    rejected_step --> [*]
+    expired --> [*]
+  }

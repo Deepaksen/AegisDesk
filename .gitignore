@@ -26,3 +26,4 @@ htmlcov/
 .vscode/
 .DS_Store
 evals/results/
+docs/design/build/node_modules/

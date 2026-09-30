@@ -1,0 +1,13 @@
+flowchart TB
+  g["ModelGuard.call(target)"] --> a{"breaker<br/>allows?"}
+  a -->|"no"| co["circuit_open<br/><small>fails fast</small>"]
+  a -->|"yes"| t["attempt model call"]
+  t --> cls{"classify"}
+  cls -->|"ok"| okm["reply → graph"]
+  cls -->|"bug"| raise["re-raise<br/><small>never disguised</small>"]
+  cls -->|"timeout · unavailable ·<br/>rate limited"| rb{"attempts<br/>left?"}
+  rb -->|"yes"| bo["backoff + jitter"] --> t
+  rb -->|"no"| fail["breaker.record_failure"]
+  cls -->|"model_error<br/>(client error)"| fail
+  fail --> safe["safe answer · stop_reason = model_error<br/><small>API 503/502 + Retry-After</small>"]
+  co --> safe

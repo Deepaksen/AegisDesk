@@ -1,0 +1,35 @@
+flowchart TB
+  subgraph edge["Entry points"]
+    direction LR
+    cli["cli"] ~~~ api["api"] ~~~ ui["ui (HTTP client only)"]
+  end
+  runtime["runtime · AegisRuntime"]
+  subgraph orch["Orchestration"]
+    direction LR
+    agents["agents"] --> graphs["graphs"]
+  end
+  subgraph cap["Capabilities"]
+    direction LR
+    tools["tools"] --> mcps["mcp_servers"] ~~~ rag["rag"]
+  end
+  subgraph gov["Governance"]
+    direction LR
+    governance["governance"] --> identity["identity"]
+    governance --> audit["audit"]
+    approvals["approvals"] --> audit
+  end
+  subgraph dat["Data"]
+    direction LR
+    domain["domain"] ~~~ persistence["persistence"]
+  end
+  subgraph xc["Cross-cutting"]
+    direction LR
+    llm["llm · prompts"] ~~~ observability["observability"] ~~~ reliability["reliability"] ~~~ evals["evals · config"]
+  end
+  edge --> runtime --> orch
+  orch --> cap
+  cap --> gov
+  runtime --> approvals
+  gov --> dat
+  cap --> dat
+  dat ~~~ xc

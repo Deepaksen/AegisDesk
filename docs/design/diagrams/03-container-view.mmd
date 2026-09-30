@@ -1,0 +1,29 @@
+flowchart TB
+  user["Browser / API client"]
+  ui["<b>ui</b> · Streamlit :8501<br/><small>ApiClient (httpx) only</small>"]
+  subgraph apiproc["api :8000"]
+    fast["FastAPI adapter<br/><small>auth · routes · SSE · problem+json</small>"]
+    rt["AegisRuntime<br/><small>use cases · idempotency · reconcile</small>"]
+    lg["LangGraph supervisor<br/><small>+ specialist subgraphs</small>"]
+    gwy["Action gateway<br/><small>+ policy engine</small>"]
+    ret["Retriever"]
+    fast --> rt --> lg
+    lg --> gwy
+    lg --> ret
+  end
+  subgraph mcpproc["mcp :8765 (internal)"]
+    direction LR
+    rs["read server"] --> mgw["gateway + policy<br/><small>same policy file</small>"]
+    as["action server"] --> mgw
+  end
+  pg[("<b>postgres</b> + pgvector<br/><small>access · approvals · audit · idempotency<br/>documents · chunks · checkpoints</small>")]
+  llm["LLM provider"]
+  col["OTel Collector → Tempo · Prometheus · Grafana<br/><small>profile: observability</small>"]
+  user --> ui -->|"HTTP + X-Employee-Id"| fast
+  gwy -->|"MCP Streamable HTTP<br/>delegation token"| mcpproc
+  lg -->|"guarded model calls"| llm
+  rt --> pg
+  ret --> pg
+  mgw --> pg
+  apiproc -.->|"OTLP traces · /metrics"| col
+  mcpproc -.->|"OTLP"| col

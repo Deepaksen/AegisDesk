@@ -1,0 +1,24 @@
+sequenceDiagram
+  autonumber
+  actor E as Employee
+  participant A as API + Runtime
+  participant G as Supervisor graph
+  participant X as Gateway · Policy
+  participant S as Stores
+  actor M as Manager
+  E->>A: "I need FinanceERP access"
+  A->>G: run turn
+  G->>X: create_access_request (MEDIUM)
+  X->>S: AR-1013 awaiting · AP-0001 manager
+  G->>S: interrupt() — checkpoint, pause
+  A-->>E: "Manager approval is required"
+  Note over A,S: process may restart — the pause is durable
+  M->>A: approve AP-0001 (comment)
+  A->>A: approver rules (not own, right approver, not expired)
+  A->>S: audit decision first, then record approval
+  A->>G: resume(thread)
+  G->>X: provision_access as access_workflow (HIGH)
+  X->>S: approval evidence → ALLOW · grant · audit
+  G-->>A: "Access has been granted"
+  A-->>M: decision + resumed answer
+  A-->>E: thread shows the update

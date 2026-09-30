@@ -1,0 +1,12 @@
+flowchart TB
+  subgraph ingest["Ingestion"]
+    direction LR
+    d["documents/*.md<br/><small>YAML front matter</small>"] --> v["validate<br/>metadata"] --> c["clean + chunk<br/><small>by heading</small>"] --> e["embed<br/><small>hashing · Ollama</small>"] --> st[("memory or<br/>pgvector")]
+  end
+  subgraph query["Query (tool)"]
+    direction LR
+    q["question +<br/>UserContext"] --> se["vector search<br/><b>access filter<br/>before ranking</b>"] --> th{"score ≥<br/>min_score?"}
+    th -->|"yes"| ctx["documents as<br/>untrusted context"] --> ans["answer +<br/>citations"] --> chk["code check:<br/>cited ⊆ retrieved"]
+    th -->|"no"| ne["no evidence"]
+  end
+  st --> se

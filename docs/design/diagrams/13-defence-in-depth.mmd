@@ -1,0 +1,10 @@
+flowchart TB
+  m["Model proposes a tool call"] --> l1["1 · Per-agent tool allowlist<br/><small>host: agent only sees its tools; unknown → refused, traced</small>"]
+  l1 --> l2["2 · Strict schema validation<br/><small>Pydantic, extra=forbid, no identity parameters</small>"]
+  l2 --> l3["3 · Trusted identity<br/><small>UserContext from auth; MCP delegation token (aud, act, request_id)</small>"]
+  l3 --> l4["4 · Policy engine (config/policy.yaml)<br/><small>agent grants · risk · authorized writes · forbidden · environment · roles · write budget</small>"]
+  l4 --> l5["5 · Approval evidence for HIGH risk<br/><small>looked up by the gateway in the store, never asserted by the caller</small>"]
+  l5 --> l6["6 · Audit before acting<br/><small>no record → no write (fail closed)</small>"]
+  l6 --> l7["7 · Tool ownership & idempotency checks<br/><small>own tickets/assets only; idempotent writes</small>"]
+  l7 --> ok["Action runs"]
+  l7 --> l8["8 · Telemetry redaction<br/><small>allowlisted attributes, secret scrubbing, pseudonymous users</small>"]
