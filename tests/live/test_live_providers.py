@@ -10,15 +10,17 @@ from __future__ import annotations
 
 import os
 import urllib.request
+from pathlib import Path
 
 import pytest
 
-from aegisdesk.agents.service_desk import build_service_desk_agent
+from aegisdesk.agents.service_desk import build_service_desk_agent, build_service_desk_graph_agent
 from aegisdesk.config import ModelProvider, Settings
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.identity.context import authenticate
 from aegisdesk.llm.client import LLMClient
 from aegisdesk.llm.factory import build_chat_model
+from aegisdesk.persistence.checkpointer import sqlite_checkpointer
 from aegisdesk.prompts.loader import Prompt
 from aegisdesk.schemas.triage import TicketTriage, TriageCategory
 
@@ -101,3 +103,17 @@ def test_service_desk_agent_does_not_leak_other_employees_assets(live_settings: 
     # Whatever the model tries, E1002's laptop cannot reach it.
     assert "ThinkPad" not in run.answer
     assert "LT14-66120" not in run.answer
+
+
+def test_graph_agent_uses_tools_and_keeps_the_thread(
+    live_settings: Settings, tmp_path: Path
+) -> None:
+    repository = ServiceDeskRepository.from_seed(live_settings.seed_data_dir)
+    user = authenticate(repository, "E1004")
+    with sqlite_checkpointer(tmp_path / "cp.sqlite") as checkpointer:
+        agent = build_service_desk_graph_agent(live_settings, repository, checkpointer=checkpointer)
+        first = agent.run("What laptop is assigned to me?", user=user, thread_id="live")
+        second = agent.run("What is its asset tag?", user=user, thread_id="live")
+
+    assert "get_my_assets" in [s.tool_name for s in first.tool_steps]
+    assert "NS-LT-0101" in second.answer

@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     models_allowlist_path: Path = PROJECT_ROOT / "config" / "models.yaml"
     prompts_dir: Path = PROJECT_ROOT / "prompts"
     seed_data_dir: Path = PROJECT_ROOT / "data" / "seed"
+    # Where LangGraph saves conversation threads (git-ignored).
+    checkpoint_db_path: Path = PROJECT_ROOT / ".aegisdesk" / "checkpoints.sqlite"
 
 
 @lru_cache(maxsize=1)

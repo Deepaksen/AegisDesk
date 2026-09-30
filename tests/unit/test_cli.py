@@ -76,3 +76,36 @@ def test_agent_interactive_session_keeps_state_between_turns(
     out = capsys.readouterr().out
     # The ticket created in turn 1 is listed in turn 2.
     assert out.count("INC-1008") >= 2
+
+
+def test_agent_thread_resumes_across_invocations(capsys: pytest.CaptureFixture[str]) -> None:
+    assert (
+        main(["agent", "--as", "E1004", "--thread", "cli-t1", "What laptop is assigned to me?"])
+        == 0
+    )
+    assert main(["agent", "--as", "E1004", "--thread", "cli-t1", "Show me ticket INC-1001"]) == 0
+    capsys.readouterr()
+
+    assert main(["thread", "cli-t1", "--as", "E1004"]) == 0
+    out = capsys.readouterr().out
+    assert "human: What laptop is assigned to me?" in out
+    assert "human: Show me ticket INC-1001" in out
+    assert "get_ticket" in out
+
+
+def test_thread_of_another_employee_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["agent", "--as", "E1004", "--thread", "cli-t2", "hello"]) == 0
+    capsys.readouterr()
+
+    assert main(["agent", "--as", "E1001", "--thread", "cli-t2", "hello"]) == 2
+    assert main(["thread", "cli-t2", "--as", "E1001"]) == 2
+    assert "belongs to another employee" in capsys.readouterr().err
+
+
+def test_loop_engine_is_still_available(capsys: pytest.CaptureFixture[str]) -> None:
+    assert (
+        main(["agent", "--as", "E1004", "--engine", "loop", "What laptop is assigned to me?"]) == 0
+    )
+    out = capsys.readouterr().out
+    assert "tool   get_my_assets({}) ok" in out
+    assert "thread_id=" not in out

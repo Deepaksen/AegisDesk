@@ -13,6 +13,9 @@ dist/
 .coverage
 htmlcov/
 
+# Local runtime state (LangGraph checkpoints)
+.aegisdesk/
+
 # Local configuration and secrets
 .env
 .env.*

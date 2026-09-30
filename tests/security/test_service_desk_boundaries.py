@@ -9,14 +9,16 @@ the model outputs, no unauthorized action happens.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
-from aegisdesk.agents.loop import AgentLimits, StopReason, ToolCallingAgent
+from aegisdesk.agents.loop import AgentLimits, AgentRun, StopReason, ToolCallingAgent
 from aegisdesk.config import PROJECT_ROOT
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.graphs.service_desk_graph import ServiceDeskGraphAgent
 from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.fake import ScriptedChatModel
 from aegisdesk.prompts.loader import load_prompt
@@ -34,17 +36,45 @@ VPN_TICKET = {
 }
 
 
-def _agent(
-    repository: ServiceDeskRepository, *script: AIMessage, limits: AgentLimits | None = None
-) -> ToolCallingAgent:
-    return ToolCallingAgent(
-        name="service_desk",
-        version="test",
-        model=ScriptedChatModel(responses=list(script)),
-        prompt=load_prompt(PROJECT_ROOT / "prompts", "service_desk", "v1"),
-        executor=ToolExecutor(build_service_desk_tools(repository)),
-        limits=limits or AgentLimits(),
-    )
+class Agent(Protocol):
+    def run(self, user_input: str, *, user: UserContext, request_id: str | None = None) -> AgentRun:
+        """Run one request."""
+        ...
+
+
+class MakeAgent(Protocol):
+    def __call__(
+        self,
+        repository: ServiceDeskRepository,
+        *script: AIMessage,
+        limits: AgentLimits | None = None,
+    ) -> Agent:
+        """Build an agent driven by a scripted model."""
+        ...
+
+
+@pytest.fixture(params=["loop", "graph"])
+def make_agent(request: pytest.FixtureRequest) -> MakeAgent:
+    """Every guarantee must hold for both the M1 loop and the M2 LangGraph engine."""
+
+    def build(
+        repository: ServiceDeskRepository,
+        *script: AIMessage,
+        limits: AgentLimits | None = None,
+    ) -> Agent:
+        common: dict[str, Any] = {
+            "name": "service_desk",
+            "version": "test",
+            "model": ScriptedChatModel(responses=list(script)),
+            "prompt": load_prompt(PROJECT_ROOT / "prompts", "service_desk", "v1"),
+            "executor": ToolExecutor(build_service_desk_tools(repository)),
+            "limits": limits or AgentLimits(),
+        }
+        if request.param == "loop":
+            return ToolCallingAgent(**common)
+        return ServiceDeskGraphAgent(**common, checkpointer=InMemorySaver())
+
+    return build
 
 
 def _calls(*calls: tuple[str, dict[str, Any]]) -> AIMessage:
@@ -61,9 +91,9 @@ def _all_tool_output(history: list[Any]) -> str:
 
 
 def test_model_cannot_choose_whose_assets_to_read(
-    repository: ServiceDeskRepository, aisha: UserContext
+    make_agent: MakeAgent, repository: ServiceDeskRepository, aisha: UserContext
 ) -> None:
-    agent = _agent(
+    agent = make_agent(
         repository,
         _calls(("get_my_assets", {"employee_id": "E1002"})),
         AIMessage(content="done"),
@@ -77,9 +107,9 @@ def test_model_cannot_choose_whose_assets_to_read(
 
 
 def test_model_cannot_read_another_employees_ticket(
-    repository: ServiceDeskRepository, aisha: UserContext
+    make_agent: MakeAgent, repository: ServiceDeskRepository, aisha: UserContext
 ) -> None:
-    agent = _agent(
+    agent = make_agent(
         repository, _calls(("get_ticket", {"ticket_id": "INC-1004"})), AIMessage(content="done")
     )
 
@@ -90,9 +120,9 @@ def test_model_cannot_read_another_employees_ticket(
 
 
 def test_model_cannot_file_a_ticket_as_someone_else(
-    repository: ServiceDeskRepository, aisha: UserContext
+    make_agent: MakeAgent, repository: ServiceDeskRepository, aisha: UserContext
 ) -> None:
-    agent = _agent(
+    agent = make_agent(
         repository,
         _calls(("create_ticket", {**VPN_TICKET, "requester_id": "E1010"})),
         AIMessage(content="done"),
@@ -108,9 +138,9 @@ def test_model_cannot_file_a_ticket_as_someone_else(
     "tool_name", ["grant_access", "direct_grant_production_admin", "reset_password", "eval"]
 )
 def test_model_cannot_call_tools_it_was_not_given(
-    repository: ServiceDeskRepository, aisha: UserContext, tool_name: str
+    make_agent: MakeAgent, repository: ServiceDeskRepository, aisha: UserContext, tool_name: str
 ) -> None:
-    agent = _agent(
+    agent = make_agent(
         repository,
         _calls((tool_name, {"employee_id": "E1004", "application": "ProductionDB"})),
         AIMessage(content="done"),
@@ -122,9 +152,9 @@ def test_model_cannot_call_tools_it_was_not_given(
 
 
 def test_repeated_create_in_one_request_makes_one_ticket(
-    repository: ServiceDeskRepository, aisha: UserContext
+    make_agent: MakeAgent, repository: ServiceDeskRepository, aisha: UserContext
 ) -> None:
-    agent = _agent(
+    agent = make_agent(
         repository,
         _calls(("create_ticket", VPN_TICKET), ("create_ticket", VPN_TICKET)),
         _calls(("create_ticket", VPN_TICKET)),
@@ -140,20 +170,22 @@ def test_repeated_create_in_one_request_makes_one_ticket(
 
 
 def test_retrying_the_same_request_does_not_duplicate_the_ticket(
-    repository: ServiceDeskRepository, aisha: UserContext
+    make_agent: MakeAgent, repository: ServiceDeskRepository, aisha: UserContext
 ) -> None:
     for _ in range(2):  # e.g. the client timed out and resent the same request
-        agent = _agent(repository, _calls(("create_ticket", VPN_TICKET)), AIMessage(content="ok"))
+        agent = make_agent(
+            repository, _calls(("create_ticket", VPN_TICKET)), AIMessage(content="ok")
+        )
         agent.run("Create a VPN ticket", user=aisha, request_id="client-req-7")
 
     assert len(repository.list_tickets_for("E1004")) == 3
 
 
 def test_a_model_that_never_stops_is_stopped(
-    repository: ServiceDeskRepository, aisha: UserContext
+    make_agent: MakeAgent, repository: ServiceDeskRepository, aisha: UserContext
 ) -> None:
     endless = [_calls(("get_my_assets", {})) for _ in range(50)]
-    agent = _agent(repository, *endless, limits=AgentLimits(max_steps=4, max_tool_calls=4))
+    agent = make_agent(repository, *endless, limits=AgentLimits(max_steps=4, max_tool_calls=4))
 
     run = agent.run("loop", user=aisha)
 

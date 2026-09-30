@@ -103,6 +103,8 @@ class AgentRun:
     history: list[BaseMessage]
     latency_ms: float
     usage: TokenUsage = field(default_factory=TokenUsage)
+    # Set when the run belongs to a persisted conversation (the LangGraph engine).
+    thread_id: str | None = None
 
     @property
     def llm_calls(self) -> int:

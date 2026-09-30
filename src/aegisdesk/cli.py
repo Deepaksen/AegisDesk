@@ -5,7 +5,10 @@
     aegisdesk triage "My VPN drops every 10 minutes"
     aegisdesk repeat "Suggest a name for a laptop" --runs 5 --temperature 1.0
     aegisdesk agent --as E1004 "What laptop is assigned to me?"
-    aegisdesk agent --as E1004               interactive session
+    aegisdesk agent --as E1004               interactive session (LangGraph, persisted)
+    aegisdesk agent --as E1004 --thread T1 "..."   continue a stored thread, even after restart
+    aegisdesk agent --as E1004 --engine loop "..." the Milestone 1 hand-written loop
+    aegisdesk thread T1 --as E1004           show a stored thread
 
 Every command prints the provider, model, prompt version, token usage and
 latency of each model call, because those are the facts later milestones will
@@ -17,20 +20,24 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+import uuid
+from collections.abc import Iterator, Sequence
+from typing import Any
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import ValidationError
 
-from aegisdesk.agents.loop import AgentRun, ModelStep, ToolCallingAgent
-from aegisdesk.agents.service_desk import build_service_desk_agent
+from aegisdesk.agents.loop import AgentRun, ModelStep, ToolStep
+from aegisdesk.agents.service_desk import build_service_desk_agent, build_service_desk_graph_agent
 from aegisdesk.config import Settings, get_settings
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.graphs.service_desk_graph import NODE_START, ThreadAccessError, step_from_entry
 from aegisdesk.identity.context import AuthenticationError, UserContext, authenticate
 from aegisdesk.llm.allowlist import ModelNotAllowedError
 from aegisdesk.llm.client import CallMetadata, LLMClient, StructuredOutputError
 from aegisdesk.llm.factory import ModelConfigurationError, build_chat_model
 from aegisdesk.llm.usage import TokenUsage
+from aegisdesk.persistence.checkpointer import sqlite_checkpointer
 from aegisdesk.prompts.loader import PromptNotFoundError, load_prompt
 from aegisdesk.schemas.triage import TicketTriage
 
@@ -110,72 +117,162 @@ def cmd_repeat(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_run(run: AgentRun, settings: Settings, quiet: bool) -> None:
-    if not quiet:
+def _format_step(step: ModelStep | ToolStep) -> str:
+    if isinstance(step, ModelStep):
+        wants = ", ".join(step.requested_tools) or "final answer"
+        return (
+            f"  · step {step.step} model  in={step.usage.input_tokens} "
+            f"out={step.usage.output_tokens} {step.latency_ms:.0f}ms -> {wants}"
+        )
+    detail = f" ({step.error_category})" if step.error_category else ""
+    return (
+        f"  · step {step.step} tool   {step.tool_name}({json.dumps(step.args)}) "
+        f"{step.status.value}{detail} {step.latency_ms:.1f}ms"
+    )
+
+
+def _print_run(run: AgentRun, settings: Settings, *, quiet: bool, show_steps: bool) -> None:
+    if show_steps and not quiet:
         for step in run.trajectory:
-            if isinstance(step, ModelStep):
-                wants = ", ".join(step.requested_tools) or "final answer"
-                print(
-                    f"  · step {step.step} model  in={step.usage.input_tokens} "
-                    f"out={step.usage.output_tokens} {step.latency_ms:.0f}ms -> {wants}"
-                )
-            else:
-                args = json.dumps(step.args)
-                detail = f" ({step.error_category})" if step.error_category else ""
-                print(
-                    f"  · step {step.step} tool   {step.tool_name}({args}) "
-                    f"{step.status.value}{detail} {step.latency_ms:.1f}ms"
-                )
+            print(_format_step(step))
     print(f"Assistant: {run.answer}")
     if not quiet:
+        thread = f" thread_id={run.thread_id}" if run.thread_id else ""
         print(
             f"  [{run.agent_name}@{run.agent_version} prompt={run.prompt_name}@"
             f"{run.prompt_version} model={settings.model_provider.value}/{settings.model_name} "
             f"stop={run.stop_reason.value} llm_calls={run.llm_calls} "
             f"tool_calls={len(run.tool_steps)} tokens={run.usage.total_tokens} "
-            f"latency={run.latency_ms:.0f}ms request_id={run.request_id}]"
+            f"latency={run.latency_ms:.0f}ms request_id={run.request_id}{thread}]"
         )
 
 
-def _agent_turn(
-    agent: ToolCallingAgent,
-    user: UserContext,
-    text: str,
-    history: list[BaseMessage],
+class _StepPrinter:
+    """Prints trajectory entries live, as each graph node finishes (streaming)."""
+
+    def __init__(self) -> None:
+        self._printed = 0
+
+    def __call__(self, node: str, update: dict[str, Any]) -> None:
+        trajectory = update.get("trajectory")
+        if trajectory is None:
+            return
+        if node == NODE_START:
+            self._printed = 0
+            return
+        for entry in trajectory[self._printed :]:
+            print(_format_step(step_from_entry(entry)), flush=True)
+        self._printed = len(trajectory)
+
+
+def _read_turns(prompt: str) -> Iterator[str]:
+    while True:
+        try:
+            text = input(prompt).strip()
+        except EOFError:
+            print()
+            return
+        if text.lower() in {"exit", "quit"}:
+            return
+        if text:
+            yield text
+
+
+def _login(settings: Settings, employee_id: str) -> tuple[ServiceDeskRepository, UserContext]:
+    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    # Simulated login. The identity is fixed here, before the model is involved.
+    return repository, authenticate(repository, employee_id)
+
+
+def _run_loop_engine(
     settings: Settings,
-    quiet: bool,
-) -> list[BaseMessage]:
-    run = agent.run(text, user=user, history=history)
-    _print_run(run, settings, quiet)
-    return run.history
+    repository: ServiceDeskRepository,
+    user: UserContext,
+    args: argparse.Namespace,
+) -> int:
+    agent = build_service_desk_agent(settings, repository, prompt_version=args.prompt_version)
+    if args.message:
+        run = agent.run(args.message, user=user)
+        _print_run(run, settings, quiet=args.quiet, show_steps=True)
+        return 0
+
+    print(f"Signed in as {user.employee_id} (engine: loop). Type 'exit' to quit.")
+    history: list[BaseMessage] = []
+    for text in _read_turns(f"{user.employee_id}> "):
+        run = agent.run(text, user=user, history=history)
+        _print_run(run, settings, quiet=args.quiet, show_steps=True)
+        history = run.history
+    return 0
+
+
+def _run_graph_engine(
+    settings: Settings,
+    repository: ServiceDeskRepository,
+    user: UserContext,
+    args: argparse.Namespace,
+) -> int:
+    thread_id = args.thread or str(uuid.uuid4())
+    with sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer:
+        agent = build_service_desk_graph_agent(
+            settings, repository, checkpointer=checkpointer, prompt_version=args.prompt_version
+        )
+        printer = None if args.quiet else _StepPrinter()
+
+        def turn(text: str) -> None:
+            run = agent.run(text, user=user, thread_id=thread_id, on_update=printer)
+            _print_run(run, settings, quiet=args.quiet, show_steps=False)
+
+        if args.message:
+            turn(args.message)
+            return 0
+
+        previous = len(agent.history(thread_id, user))
+        resumed = f", resuming {previous} stored messages" if previous else ""
+        print(f"Signed in as {user.employee_id}. Thread {thread_id}{resumed}. Type 'exit' to quit.")
+        for text in _read_turns(f"{user.employee_id}> "):
+            turn(text)
+    return 0
 
 
 def cmd_agent(settings: Settings, args: argparse.Namespace) -> int:
-    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
     try:
-        # Simulated login. The identity is fixed here, before the model is involved.
-        user = authenticate(repository, args.employee_id)
+        repository, user = _login(settings, args.employee_id)
+        if args.engine == "loop":
+            return _run_loop_engine(settings, repository, user, args)
+        return _run_graph_engine(settings, repository, user, args)
     except AuthenticationError as exc:
         print(f"Login failed: {exc}", file=sys.stderr)
         return 2
+    except ThreadAccessError as exc:
+        print(f"Access denied: {exc}", file=sys.stderr)
+        return 2
 
-    agent = build_service_desk_agent(settings, repository, prompt_version=args.prompt_version)
-    if args.message:
-        _agent_turn(agent, user, args.message, [], settings, args.quiet)
-        return 0
 
-    print(f"Signed in as {user.employee_id}. Type 'exit' to quit.")
-    history: list[BaseMessage] = []
-    while True:
-        try:
-            text = input(f"{user.employee_id}> ").strip()
-        except EOFError:
-            print()
-            return 0
-        if text.lower() in {"exit", "quit"}:
-            return 0
-        if text:
-            history = _agent_turn(agent, user, text, history, settings, args.quiet)
+def cmd_thread(settings: Settings, args: argparse.Namespace) -> int:
+    try:
+        repository, user = _login(settings, args.employee_id)
+        with sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer:
+            agent = build_service_desk_graph_agent(settings, repository, checkpointer=checkpointer)
+            messages = agent.history(args.thread_id, user)
+    except AuthenticationError as exc:
+        print(f"Login failed: {exc}", file=sys.stderr)
+        return 2
+    except ThreadAccessError as exc:
+        print(f"Access denied: {exc}", file=sys.stderr)
+        return 2
+
+    if not messages:
+        print(f"No stored messages for thread {args.thread_id}.")
+        return 1
+    for message in messages:
+        text: str = message.text
+        if isinstance(message, AIMessage) and message.tool_calls:
+            calls = ", ".join(f"{c['name']}({json.dumps(c['args'])})" for c in message.tool_calls)
+            text = f"{text} [tool calls: {calls}]".strip()
+        if len(text) > 160:
+            text = text[:157] + "..."
+        print(f"{message.type:>5}: {text}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -211,6 +308,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--prompt-version", default="v1")
     p.add_argument("--quiet", action="store_true", help="print only the answer")
+    p.add_argument(
+        "--engine",
+        choices=["graph", "loop"],
+        default="graph",
+        help="graph: LangGraph with persisted threads (default); loop: the M1 hand-written loop",
+    )
+    p.add_argument("--thread", help="thread ID to continue (graph engine); a new one if omitted")
+
+    p = sub.add_parser("thread", help="show a stored conversation thread")
+    p.add_argument("thread_id")
+    p.add_argument("--as", dest="employee_id", required=True, help="employee ID to sign in as")
     return parser
 
 
@@ -220,6 +328,7 @@ COMMANDS = {
     "triage": cmd_triage,
     "repeat": cmd_repeat,
     "agent": cmd_agent,
+    "thread": cmd_thread,
 }
 
 

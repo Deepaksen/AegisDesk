@@ -1,0 +1,314 @@
+"""The Service Desk agent as an explicit LangGraph graph.
+
+Same behaviour as the hand-written loop in `aegisdesk.agents.loop`, but every
+step is a named **node**, every "what next?" decision is a **conditional
+edge**, and the state is checkpointed after each node:
+
+    START → start_turn → call_model ─┬─ no tool calls ─────────────► END
+                             ▲       └─ tool calls ─► run_tools ─┐
+                             │                                   │
+                             └──────── under the limits ◄────────┤
+                                                                 └─ limit hit ─► limit_reached → END
+
+What stays ours (unchanged from M1): the tools, the `ToolExecutor` security
+boundary, trusted identity and the limits. What LangGraph now provides:
+state merging, checkpointing per thread, step-by-step streaming, and a
+framework-level recursion limit as a second backstop.
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from collections.abc import Callable, Iterator
+from typing import Any
+
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+from aegisdesk.agents.loop import (
+    STEP_LIMIT_ANSWER,
+    TOOL_LIMIT_ANSWER,
+    AgentLimits,
+    AgentRun,
+    ModelStep,
+    StopReason,
+    ToolStep,
+)
+from aegisdesk.graphs.state import ServiceDeskState, claims_from, context_from
+from aegisdesk.identity.context import UserContext
+from aegisdesk.llm.usage import TokenUsage
+from aegisdesk.prompts.loader import Prompt
+from aegisdesk.tools.executor import OutcomeStatus, ToolExecutor
+
+NODE_START = "start_turn"
+NODE_MODEL = "call_model"
+NODE_TOOLS = "run_tools"
+NODE_LIMIT = "limit_reached"
+
+# Called with (node name, the partial state update that node returned).
+UpdateCallback = Callable[[str, dict[str, Any]], None]
+
+
+class ThreadAccessError(PermissionError):
+    """The thread exists but belongs to another employee."""
+
+
+def build_service_desk_graph(
+    *,
+    model: BaseChatModel,
+    prompt: Prompt,
+    executor: ToolExecutor,
+    limits: AgentLimits,
+    checkpointer: BaseCheckpointSaver[Any] | None,
+) -> CompiledStateGraph[Any, Any, Any, Any]:
+    model_with_tools = model.bind_tools(executor.model_definitions())
+
+    # -- nodes: plain functions from state to a partial state update ----------
+
+    def start_turn(state: ServiceDeskState) -> dict[str, Any]:
+        return {
+            "owner_id": state.get("owner_id") or state["user"]["employee_id"],
+            "llm_calls": 0,
+            "tool_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "stop_reason": None,
+            "trajectory": [],
+        }
+
+    def call_model(state: ServiceDeskState) -> dict[str, Any]:
+        # The system prompt is added here, at call time, not stored in the thread.
+        messages = [SystemMessage(content=prompt.system), *state["messages"]]
+        started = time.perf_counter()
+        reply = model_with_tools.invoke(messages)
+        usage = TokenUsage.from_message(reply)
+        step = state["llm_calls"] + 1
+        entry = {
+            "kind": "model",
+            "step": step,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "requested_tools": [c["name"] for c in reply.tool_calls],
+        }
+        return {
+            "messages": [reply],
+            "llm_calls": step,
+            "input_tokens": state["input_tokens"] + usage.input_tokens,
+            "output_tokens": state["output_tokens"] + usage.output_tokens,
+            "trajectory": [*state["trajectory"], entry],
+            "stop_reason": None if reply.tool_calls else StopReason.FINAL_ANSWER.value,
+        }
+
+    def run_tools(state: ServiceDeskState) -> dict[str, Any]:
+        reply = state["messages"][-1]
+        if not isinstance(reply, AIMessage):  # the routing below guarantees this
+            raise RuntimeError("run_tools reached without a model reply")
+        user = context_from(state["user"])
+        made = state["tool_calls"]
+        new_messages: list[BaseMessage] = []
+        trajectory = list(state["trajectory"])
+        stop_reason: str | None = None
+
+        for call in reply.tool_calls:
+            if made >= limits.max_tool_calls:
+                # Every tool call needs a result, even the ones we refuse to run.
+                new_messages.append(_not_executed(call["id"] or "", call["name"]))
+                stop_reason = StopReason.MAX_TOOL_CALLS.value
+                continue
+            made += 1
+            outcome = executor.execute(
+                call["name"], call["args"], user=user, request_id=state["request_id"]
+            )
+            new_messages.append(
+                ToolMessage(
+                    content=outcome.content,
+                    tool_call_id=call["id"] or "",
+                    name=call["name"],
+                    status="success" if outcome.status is OutcomeStatus.OK else "error",
+                )
+            )
+            trajectory.append(
+                {
+                    "kind": "tool",
+                    "step": state["llm_calls"],
+                    "tool_name": call["name"],
+                    "args": dict(call["args"]),
+                    "status": outcome.status.value,
+                    "latency_ms": outcome.latency_ms,
+                    "error_category": outcome.error_category,
+                    "result": outcome.content,
+                }
+            )
+
+        return {
+            "messages": new_messages,
+            "tool_calls": made,
+            "trajectory": trajectory,
+            "stop_reason": stop_reason,
+        }
+
+    def limit_reached(state: ServiceDeskState) -> dict[str, Any]:
+        reason = StopReason(state.get("stop_reason") or StopReason.MAX_STEPS.value)
+        answer = TOOL_LIMIT_ANSWER if reason is StopReason.MAX_TOOL_CALLS else STEP_LIMIT_ANSWER
+        return {"messages": [AIMessage(content=answer)], "stop_reason": reason.value}
+
+    # -- conditional edges: plain functions from state to the next node's name --
+
+    def after_model(state: ServiceDeskState) -> str:
+        last = state["messages"][-1]
+        return NODE_TOOLS if isinstance(last, AIMessage) and last.tool_calls else END
+
+    def after_tools(state: ServiceDeskState) -> str:
+        if state.get("stop_reason") == StopReason.MAX_TOOL_CALLS.value:
+            return NODE_LIMIT
+        if state["llm_calls"] >= limits.max_steps:
+            return NODE_LIMIT
+        return NODE_MODEL
+
+    graph = StateGraph(ServiceDeskState)
+    graph.add_node(NODE_START, start_turn)
+    graph.add_node(NODE_MODEL, call_model)
+    graph.add_node(NODE_TOOLS, run_tools)
+    graph.add_node(NODE_LIMIT, limit_reached)
+
+    graph.add_edge(START, NODE_START)
+    graph.add_edge(NODE_START, NODE_MODEL)
+    graph.add_conditional_edges(NODE_MODEL, after_model, [NODE_TOOLS, END])
+    graph.add_conditional_edges(NODE_TOOLS, after_tools, [NODE_MODEL, NODE_LIMIT])
+    graph.add_edge(NODE_LIMIT, END)
+
+    return graph.compile(checkpointer=checkpointer)
+
+
+def _not_executed(call_id: str, name: str) -> ToolMessage:
+    return ToolMessage(
+        content='{"error": {"category": "not_executed", "message": "Tool call limit reached."}}',
+        tool_call_id=call_id,
+        name=name,
+        status="error",
+    )
+
+
+class ServiceDeskGraphAgent:
+    """Runs turns of a persisted conversation (a *thread*) through the graph."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        version: str,
+        model: BaseChatModel,
+        prompt: Prompt,
+        executor: ToolExecutor,
+        limits: AgentLimits,
+        checkpointer: BaseCheckpointSaver[Any],
+    ) -> None:
+        self.name = name
+        self.version = version
+        self._prompt = prompt
+        self._limits = limits
+        self.graph = build_service_desk_graph(
+            model=model,
+            prompt=prompt,
+            executor=executor,
+            limits=limits,
+            checkpointer=checkpointer,
+        )
+
+    def _config(self, thread_id: str) -> RunnableConfig:
+        # Each model call and each tool round is one superstep, plus start/limit.
+        # Our own limits stop the run first; this is LangGraph's backstop.
+        return {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": 2 * self._limits.max_steps + 4,
+        }
+
+    def history(self, thread_id: str, user: UserContext) -> list[BaseMessage]:
+        """The stored conversation, if `user` owns the thread (empty if it doesn't exist)."""
+        values = self._authorised_state(thread_id, user)
+        return list(values.get("messages", []))
+
+    def _authorised_state(self, thread_id: str, user: UserContext) -> dict[str, Any]:
+        # Ownership is checked by application code *before* anything is written
+        # to the thread, so a stranger cannot even append a message to it.
+        values: dict[str, Any] = self.graph.get_state(self._config(thread_id)).values
+        owner = values.get("owner_id")
+        if owner is not None and owner != user.employee_id:
+            raise ThreadAccessError(f"Thread {thread_id!r} belongs to another employee.")
+        return values
+
+    def run(
+        self,
+        user_input: str,
+        *,
+        user: UserContext,
+        thread_id: str | None = None,
+        request_id: str | None = None,
+        on_update: UpdateCallback | None = None,
+    ) -> AgentRun:
+        thread_id = thread_id or str(uuid.uuid4())
+        request_id = request_id or str(uuid.uuid4())
+        self._authorised_state(thread_id, user)
+
+        started = time.perf_counter()
+        turn_input: dict[str, Any] = {
+            "messages": [HumanMessage(content=user_input)],
+            "user": claims_from(user),
+            "request_id": request_id,
+        }
+        for node, update in self._stream(turn_input, thread_id):
+            if on_update is not None:
+                on_update(node, update)
+
+        state: dict[str, Any] = self.graph.get_state(self._config(thread_id)).values
+        return AgentRun(
+            agent_name=self.name,
+            agent_version=self.version,
+            prompt_name=self._prompt.name,
+            prompt_version=self._prompt.version,
+            request_id=request_id,
+            answer=state["messages"][-1].text,
+            stop_reason=StopReason(state["stop_reason"]),
+            trajectory=[step_from_entry(entry) for entry in state["trajectory"]],
+            history=list(state["messages"]),
+            latency_ms=round((time.perf_counter() - started) * 1000, 2),
+            usage=TokenUsage(state["input_tokens"], state["output_tokens"]),
+            thread_id=thread_id,
+        )
+
+    def _stream(self, turn_input: dict[str, Any], thread_id: str) -> Iterator[tuple[str, Any]]:
+        # stream_mode="updates" yields {node_name: update} after each node finishes.
+        for chunk in self.graph.stream(turn_input, self._config(thread_id), stream_mode="updates"):
+            for node, update in chunk.items():
+                yield node, update or {}
+
+
+def step_from_entry(entry: dict[str, Any]) -> ModelStep | ToolStep:
+    if entry["kind"] == "model":
+        return ModelStep(
+            step=entry["step"],
+            usage=TokenUsage(entry["input_tokens"], entry["output_tokens"]),
+            latency_ms=entry["latency_ms"],
+            requested_tools=tuple(entry["requested_tools"]),
+        )
+    return ToolStep(
+        step=entry["step"],
+        tool_name=entry["tool_name"],
+        args=entry["args"],
+        status=OutcomeStatus(entry["status"]),
+        latency_ms=entry["latency_ms"],
+        error_category=entry["error_category"],
+        result=entry["result"],
+    )

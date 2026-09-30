@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -26,7 +27,11 @@ _MODEL_ENV_VARS = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_env(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Iterator[None]:
+def _isolate_env(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[None]:
+    # Never write conversation checkpoints into the working tree during tests.
+    monkeypatch.setenv("CHECKPOINT_DB_PATH", str(tmp_path / "checkpoints.sqlite"))
     if request.node.get_closest_marker("live") is None:
         for name in _MODEL_ENV_VARS:
             monkeypatch.delenv(name, raising=False)
