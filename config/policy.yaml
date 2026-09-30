@@ -106,3 +106,9 @@ environments:
 
 # Tools that need a user role, e.g. approving requests (Milestone 7).
 required_roles: {}
+
+# Per-request limits (Milestone 9, found by the adversarial evaluation): a
+# manipulated model could otherwise make many individually-authorized writes in
+# one request (e.g. six tickets). Counted by the gateway from the audit trail.
+limits:
+  max_writes_per_request: 3

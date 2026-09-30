@@ -17,6 +17,7 @@ All data is synthetic.
 | M6 Governance ✅ | Action gateway on every tool call (host and MCP servers): deterministic policy from `config/policy.yaml` (agent grants, risk classes, authorized writes, forbidden actions, environments), fail-closed; append-only audit events in PostgreSQL (UPDATE/DELETE/TRUNCATE rejected); deliberate bypass attempts tested | [M6](docs/milestones/M6-governance.md) |
 | M7 Human approval ✅ | Sensitive access requests pause the LangGraph workflow (`interrupt`), survive restarts (PostgreSQL access store + checkpointer), and resume on the approver's decision; approver rules with separation of duties, expiry and idempotency; provisioning only by the workflow identity with gateway-verified approval evidence; audited end to end | [M7](docs/milestones/M7-approvals.md) |
 | M8 Observability ✅ | OpenTelemetry traces (one trace per request, across MCP servers) with GenAI attributes, the spec's metrics, JSON logs with trace context, optional LangSmith, allowlist redaction; Collector + Tempo + Prometheus + Grafana dashboard (docker compose profile); `--trace` span trees; injected faults for debugging | [M8](docs/milestones/M8-observability.md) |
+| M9 Evaluations ✅ | 60-case golden dataset and an 8-case adversarial suite run through the real system; deterministic, RAG and trajectory checks from trajectories, audit, spans and data changes; latency, tokens and cost; multi-agent vs single-agent comparison; safety and regression gates in CI; opt-in LLM judge; per-request write budget (found by the adversarial suite) | [M9](docs/milestones/M9-evaluations.md) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
@@ -54,6 +55,10 @@ uv run aegisdesk db init                                            # migrations
 uv run aegisdesk agent --as E1004 "Please create an access request for FinanceERP for month-end reporting"
 uv run aegisdesk approvals list --as E1010
 uv run aegisdesk approvals approve AP-0001 --as E1010 --comment "ok"   # resumes the employee's thread
+
+# Evaluations (M9)
+uv run aegisdesk eval golden --config multi --compare single          # 60 cases, two versions side by side
+uv run aegisdesk eval golden --dataset evals/adversarial/security_v1.yaml
 
 # Observability (M8)
 uv run aegisdesk agent --as E1004 --trace "What laptop is assigned to me?"   # span tree, no infrastructure
@@ -103,4 +108,5 @@ uv run pytest -m live         # real providers; skips any without a key or a run
 * [`docs/milestones/`](docs/milestones/): per-milestone learning notes
 * [`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md): agents, tools, handoffs and isolation
 * [`docs/RAG_DESIGN.md`](docs/RAG_DESIGN.md): knowledge base and retrieval design
+* [`docs/EVALUATION.md`](docs/EVALUATION.md): datasets, checks, metrics, gates and the judge
 * [`docs/adr/`](docs/adr/): architecture decision records

@@ -96,6 +96,13 @@ class ActionGateway:
         thread_id: str | None = None,
     ) -> Authorization:
         with tracing.span("policy.evaluate", **{tracing.TOOL_NAME: tool}) as current:
+            writes_so_far = 0
+            if access is ToolAccess.WRITE:
+                try:
+                    writes_so_far = self._writes_in_request(request_id)
+                except AuditError:
+                    logger.exception("cannot count writes for request %s", request_id)
+                    writes_so_far = 10**6  # fail closed: the budget check denies
             evidence = None
             if self.approvals is not None:
                 # From the store, keyed by the validated arguments; nothing the caller asserts.
@@ -107,6 +114,7 @@ class ActionGateway:
                     agent=agent,
                     environment=self.environment,
                     approval=evidence,
+                    writes_in_request=writes_so_far,
                 )
             )
             current.set_attribute("aegisdesk.policy.decision", decision.decision.value)
@@ -162,6 +170,16 @@ class ActionGateway:
                 request_id,
             )
         return Authorization(decision, event)
+
+    def _writes_in_request(self, request_id: str) -> int:
+        """Writes this gateway already allowed for the request (idempotent repeats included)."""
+        return sum(
+            1
+            for e in self.audit.query(request_id=request_id, limit=10_000)
+            if e.phase is AuditPhase.DECISION
+            and e.policy_decision == Decision.ALLOW.value
+            and e.risk in (ToolRisk.MEDIUM.value, ToolRisk.HIGH.value)
+        )
 
     def record_outcome(
         self, authorization: Authorization, *, outcome: str, latency_ms: float

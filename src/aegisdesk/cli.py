@@ -59,6 +59,7 @@ from aegisdesk.approvals.service import ApprovalError, ApprovalService
 from aegisdesk.config import (
     PROJECT_ROOT,
     DataStoreKind,
+    ModelProvider,
     Settings,
     ToolTransport,
     VectorStoreKind,
@@ -66,7 +67,11 @@ from aegisdesk.config import (
 )
 from aegisdesk.domain.access import ApprovalRecord
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.evals.golden import GoldenDataset
+from aegisdesk.evals.judge import Judge
+from aegisdesk.evals.report import Pricing, Report, comparison, summary
 from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
+from aegisdesk.evals.runner import CaseRun, EvalRunner, SystemConfig
 from aegisdesk.governance.factory import build_audit_log, build_gateway
 from aegisdesk.governance.policy import PolicyEngine, PolicyError, PolicyInput
 from aegisdesk.graphs.service_desk_graph import (
@@ -455,6 +460,8 @@ def cmd_ask(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_eval(settings: Settings, args: argparse.Namespace) -> int:
+    if args.eval_command == "golden":
+        return _eval_golden(settings, args)
     dataset = RagDataset.load(args.dataset)
     repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
     report = evaluate_retrieval(dataset, build_retriever(settings), repository)
@@ -555,6 +562,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval", help="run an evaluation suite")
     ev_sub = ev.add_subparsers(dest="eval_command", required=True)
+    p = ev_sub.add_parser("golden", help="golden dataset: agents, tools, policy, RAG (M9)")
+    p.add_argument("--dataset", type=Path, default=PROJECT_ROOT / "evals/datasets/golden_v1.yaml")
+    p.add_argument("--config", choices=[c.value for c in SystemConfig], default="multi")
+    p.add_argument("--compare", choices=[c.value for c in SystemConfig], help="second config")
+    p.add_argument("--judge", action="store_true", help="LLM judge (EVAL_JUDGE_PROVIDER/MODEL)")
+    p.add_argument("--quality-gate", action="store_true", help="enforce the spec's targets")
+    p.add_argument("--baseline", type=Path, default=None, help="fail if metrics drop below it")
+    p.add_argument("--write-baseline", type=Path, default=None, help="store this run as baseline")
+    p.add_argument("--out", type=Path, default=None, help="results JSON path")
     p = ev_sub.add_parser("rag", help="deterministic retrieval evaluation")
     p.add_argument("--dataset", type=Path, default=PROJECT_ROOT / "evals/datasets/rag_v1.yaml")
     p.add_argument("--min-hit-rate", type=float, default=None, help="fail if hit rate is lower")
@@ -707,6 +723,93 @@ def cmd_audit(settings: Settings, args: argparse.Namespace) -> int:
             f"request_id={e.request_id}" + (f" thread_id={e.thread_id}" if e.thread_id else "")
         )
     return 0
+
+
+def _golden_report(
+    settings: Settings, dataset: GoldenDataset, config: SystemConfig, judge: bool
+) -> Report:
+    model_label = f"{settings.model_provider.value}/{settings.model_name}"
+    runner = EvalRunner(
+        settings,
+        build_retriever(settings),
+        today=dataset.today,
+        model_factory=lambda: build_chat_model(settings),
+        model_label=model_label,
+    )
+    runs = []
+    for case in dataset.cases:
+        runs.append(runner.run(case, config))
+    report = Report.build(
+        dataset.name,
+        dataset.version,
+        config.value,
+        model_label,
+        runs,
+        Pricing.load(PROJECT_ROOT / "config" / "pricing.yaml"),
+    )
+    if judge:
+        report.judge = _judge(settings, runs)
+    return report
+
+
+def _judge(settings: Settings, runs: list[CaseRun]) -> dict[str, Any]:
+    provider = os.environ.get("EVAL_JUDGE_PROVIDER")
+    name = os.environ.get("EVAL_JUDGE_MODEL")
+    if not provider or not name:
+        return {"model": None, "status": "not run: set EVAL_JUDGE_PROVIDER and EVAL_JUDGE_MODEL"}
+    judge_settings = settings.model_copy(
+        update={"model_provider": ModelProvider(provider), "model_name": name}
+    )
+    judge = Judge(
+        build_chat_model(judge_settings),
+        load_prompt(settings.prompts_dir, "judge", "v1"),
+        provider=ModelProvider(provider),
+        model_name=name,
+    )
+    return judge.grade_all(runs)
+
+
+def _eval_golden(settings: Settings, args: argparse.Namespace) -> int:
+    dataset = GoldenDataset.load(args.dataset)
+    report = _golden_report(settings, dataset, SystemConfig(args.config), args.judge)
+    print(summary(report))
+    out = args.out or (
+        PROJECT_ROOT
+        / "evals"
+        / "results"
+        / f"{dataset.name}-v{dataset.version}-{report.config}-{settings.model_name}.json"
+    )
+    report.write(out)
+    print(f"  results: {out}")
+
+    if args.compare:
+        other = _golden_report(settings, dataset, SystemConfig(args.compare), False)
+        other.write(out.with_name(out.stem.replace(report.config, other.config) + ".json"))
+        print()
+        print(comparison(report, other))
+
+    failures = [f"safety: {f}" for f in report.safety_failures()]
+    if args.quality_gate:
+        failures += [f"quality: {f}" for f in report.quality_failures()]
+    baseline = args.baseline
+    if baseline is not None and not baseline.exists():
+        failures.append(f"regression: baseline {baseline} not found")
+    elif baseline is not None:
+        failures += [
+            f"regression: {f}"
+            for f in report.regression_failures(json.loads(baseline.read_text(encoding="utf-8")))
+        ]
+    if args.write_baseline is not None:
+        report.write(args.write_baseline)
+        print(f"  baseline written: {args.write_baseline}")
+    for failure in failures:
+        print(f"  GATE FAILED {failure}")
+    if not failures:
+        print(
+            "  gates passed"
+            + (" (incl. quality)" if args.quality_gate else " (safety, regression)")
+        )
+    return 1 if failures else 0
 
 
 def _print_trace(trace_id: str | None) -> None:

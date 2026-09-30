@@ -120,10 +120,22 @@ class CompositeToolRunner:
     ) -> ToolOutcome:
         runner = self._by_name.get(name)
         if runner is None:
-            message = f"There is no tool named {name!r}."
-            content = json.dumps({"error": {"category": "unknown_tool", "message": message}})
-            return ToolOutcome(name, OutcomeStatus.ERROR, content, 0.0, "unknown_tool")
+            return refused_unknown_tool(name)
         return runner.execute(name, args, user=user, request_id=request_id, thread_id=thread_id)
+
+
+def refused_unknown_tool(name: str) -> ToolOutcome:
+    """A tool this agent does not have. Traced and counted like any other refusal."""
+    message = f"There is no tool named {name!r}."
+    content = json.dumps({"error": {"category": "unknown_tool", "message": message}})
+    outcome = ToolOutcome(name, OutcomeStatus.ERROR, content, 0.0, "unknown_tool")
+    with tracing.span(
+        f"execute_tool {name}", **{tracing.OPERATION: "execute_tool", tracing.TOOL_NAME: name}
+    ) as current:
+        current.set_attribute(tracing.STATUS, outcome.status.value)
+        tracing.mark_error(current, "unknown_tool")
+    record_tool_metrics(outcome)
+    return outcome
 
 
 def record_tool_metrics(outcome: ToolOutcome) -> None:

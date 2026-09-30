@@ -248,3 +248,42 @@ def test_shipped_policy_is_valid(engine: PolicyEngine) -> None:
 def test_only_the_approval_workflow_may_provision(engine: PolicyEngine) -> None:
     holders = {agent for agent, tools in engine.data.agents.items() if "provision_access" in tools}
     assert holders == {"access_workflow"}
+
+
+# Milestone 9: found by the adversarial suite (adv-05, a burst of six tickets).
+def test_write_budget_denies_writes_beyond_the_per_request_limit(
+    engine: PolicyEngine, aisha: UserContext
+) -> None:
+    def ask(tool: str, writes: int) -> tuple[Decision, tuple[str, ...]]:
+        decision = engine.evaluate(
+            PolicyInput(
+                tool=tool,
+                user=aisha,
+                agent=_agent("service_desk"),
+                environment="development",
+                writes_in_request=writes,
+            )
+        )
+        return decision.decision, decision.reasons
+
+    assert ask("create_ticket", 2)[0] is Decision.ALLOW
+    assert ask("create_ticket", 3) == (Decision.DENY, ("write_budget_exceeded",))
+    # Reads are never budgeted.
+    assert ask("list_my_tickets", 50)[0] is Decision.ALLOW
+
+
+def test_write_budget_is_optional(tmp_path: Path, aisha: UserContext) -> None:
+    data = yaml.safe_load(POLICY.read_text())
+    del data["limits"]
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml.safe_dump(data))
+    decision = PolicyEngine.from_file(path).evaluate(
+        PolicyInput(
+            tool="create_ticket",
+            user=aisha,
+            agent=_agent("service_desk"),
+            environment="development",
+            writes_in_request=99,
+        )
+    )
+    assert decision.decision is Decision.ALLOW

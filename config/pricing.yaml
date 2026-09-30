@@ -1,0 +1,14 @@
+# Model prices for cost estimates in evaluations (spec section 30).
+#
+# USD per million tokens, Anthropic first-party API list prices as cached on
+# 2026-09-25. Prices change: check https://platform.claude.com/docs pricing
+# before relying on them. Local models (Ollama) and the fake model cost 0 here;
+# their hardware cost is not modelled. Unknown models are reported as "no price".
+currency: USD
+as_of: "2026-09-25"
+models:
+  anthropic/claude-haiku-4-5-20251001: {input: 1.00, output: 5.00}
+  anthropic/claude-sonnet-5-5: {input: 2.00, output: 10.00}
+  ollama/llama3.2: {input: 0.0, output: 0.0}
+  ollama/qwen2.5:7b: {input: 0.0, output: 0.0}
+  fake/fake-scripted: {input: 0.0, output: 0.0}

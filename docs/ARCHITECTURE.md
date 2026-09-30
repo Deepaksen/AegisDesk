@@ -13,10 +13,10 @@ This document describes the **target** architecture and marks what has been buil
 | M6 Governance | ✅ built ([notes](milestones/M6-governance.md), [design](GOVERNANCE_DESIGN.md)) |
 | M7 Human approval | ✅ built ([notes](milestones/M7-approvals.md), [design](APPROVALS_DESIGN.md)) |
 | M8 Observability | ✅ built ([notes](milestones/M8-observability.md), [design](OBSERVABILITY.md)) |
-| M9 Evaluations | not started |
+| M9 Evaluations | ✅ built ([notes](milestones/M9-evaluations.md), [design](EVALUATION.md)) |
 | M10 API + UI | not started |
 | M11 Reliability | not started |
-| M12 CI/CD | partial: lint, type and unit-test gates run in CI from M0 |
+| M12 CI/CD | partial: lint, type and test gates from M0; RAG gate from M3; golden and adversarial safety + regression gates from M9 |
 
 ## Guiding principle
 
@@ -57,7 +57,23 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M8
+## What exists after M9
+
+### Evaluation lifecycle
+
+```
+datasets (golden 60, adversarial 8, versioned YAML)
+   └─► EvalRunner × system version (multi | multi_mcp | single) × model
+          fresh seeded world per case · scripted model for attacks · approvals + resume
+          captures: trajectory · audit events · spans · JSON logs · data before/after
+   └─► checks in code (routing, tools, args, policy, approval, facts, citations,
+          effects, unauthorized, approval enforced, limits, traced, secrets)  [+ opt-in LLM judge]
+   └─► report (quality, safety, latency, tokens, cost) ─► gates: safety (CI) · quality · regression (CI)
+```
+
+* **Evaluation** (`src/aegisdesk/evals/`, `evals/`): the golden dataset and adversarial suite run through the real system; deterministic, RAG and trajectory checks; performance and cost; version comparison; safety and regression gates in CI; optional LLM judge. The adversarial suite found a real gap, closed by a per-request write budget in the policy. See [EVALUATION.md](EVALUATION.md) and [ADR 0014](adr/0014-deterministic-first-evaluation.md).
+
+From M8:
 
 ### Observability
 
@@ -176,7 +192,7 @@ query:   question + UserContext ─► embed ─► search top-k WHERE access ru
 ```
 
 * **RAG** (`src/aegisdesk/rag/`): details in [RAG_DESIGN.md](RAG_DESIGN.md); decisions in [ADR 0005](adr/0005-postgresql-pgvector.md) (PostgreSQL + pgvector) and [ADR 0006](adr/0006-embeddings.md) (embeddings). Access control is enforced inside the vector query, before ranking. Retrieved text is untrusted data; the M1 tool boundary still decides what can happen.
-* **Evaluation** (`evals/datasets/`, `src/aegisdesk/evals/`): deterministic retrieval metrics with a CI gate (0 access violations, hit rate ≥ 0.85).
+* **Retrieval evaluation** (`evals/datasets/rag_retrieval_v1.yaml`): deterministic retrieval metrics with a CI gate (0 access violations, hit rate ≥ 0.85).
 
 ### LangGraph topology
 
@@ -226,12 +242,12 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `migrations/` | `migrations/` (Alembic), `alembic.ini` | M3 |
 | `approvals/` | `src/aegisdesk/approvals/` | M7 |
 | `observability/`, `infrastructure/` | `src/aegisdesk/observability/`, `infra/observability/` (+ Grafana dashboards) | M8 |
-| `evals/` | `evals/datasets/` (data), `src/aegisdesk/evals/` (evaluators) | M3 (retrieval); M9 (full suite) |
+| `evals/` | `evals/datasets/`, `evals/adversarial/`, `evals/regression/` (baselines); `src/aegisdesk/evals/` (runner, evaluators, judge) | M3 (retrieval); M9 (full suite) |
 | `apps/api`, `apps/ui` | … | M10 |
 
 ## Diagrams still to come
 
-Written as each milestone lands: workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
+Written as each milestone lands: workflow (M7), observability architecture (M8), evaluation lifecycle (M9); deployment (M10–M12).
 
 ## Decisions
 

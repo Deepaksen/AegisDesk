@@ -46,7 +46,12 @@ from aegisdesk.identity.context import UserContext
 from aegisdesk.identity.tokens import TOKEN_META_KEY, TokenIssuer
 from aegisdesk.mcp_servers.catalogue import McpServerName
 from aegisdesk.observability import faults, propagation, tracing
-from aegisdesk.tools.executor import OutcomeStatus, ToolOutcome, record_tool_metrics
+from aegisdesk.tools.executor import (
+    OutcomeStatus,
+    ToolOutcome,
+    record_tool_metrics,
+    refused_unknown_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +260,7 @@ class RemoteToolRunner:
             return outcome(OutcomeStatus.ERROR, body, category)
 
         if name not in self._tools:
-            return error("unknown_tool", f"There is no tool named {name!r}.")
+            return refused_unknown_tool(name)
 
         attempts = 2 if self.is_read_only(name) else 1
         for attempt in range(1, attempts + 1):

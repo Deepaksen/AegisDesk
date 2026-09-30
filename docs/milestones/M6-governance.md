@@ -74,6 +74,7 @@ Like a Rego `deny` set, every rule runs and every failing rule adds a reason. On
 | `not_approved_for_environment` | e.g. production allows reads only, for now |
 | `write_not_authorized` | MEDIUM risk and not in `authorized_writes` |
 | `missing_role` | the tool needs a role the user lacks (used by approvals, M7) |
+| `write_budget_exceeded` | more MEDIUM/HIGH writes in one request than `limits.max_writes_per_request` (added in M9, found by the adversarial suite) |
 | `policy_error` | the engine itself failed: fail closed |
 
 Any reason → **DENY**. Otherwise **HIGH** risk → **REQUIRE_APPROVAL**. Otherwise **ALLOW**. This is the spec's §11 table: LOW is automatic, MEDIUM only if explicitly authorized, HIGH needs human approval.

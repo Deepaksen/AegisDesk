@@ -48,6 +48,7 @@ class DenyReason(StrEnum):
     NOT_APPROVED_FOR_ENVIRONMENT = "not_approved_for_environment"
     WRITE_NOT_AUTHORIZED = "write_not_authorized"
     MISSING_ROLE = "missing_role"
+    WRITE_BUDGET_EXCEEDED = "write_budget_exceeded"
     POLICY_ERROR = "policy_error"
 
 
@@ -69,6 +70,8 @@ class PolicyInput:
     # Where the enforcing component runs (not what the caller claims).
     environment: str
     approval: ApprovalEvidence | None = None
+    # Writes (MEDIUM/HIGH) already allowed in this request, counted by the gateway.
+    writes_in_request: int = 0
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,10 @@ class EnvironmentRule(_Strict):
     allowed_tools: Literal["all"] | list[str]
 
 
+class LimitsRule(_Strict):
+    max_writes_per_request: int | None = Field(default=None, ge=1)
+
+
 class PolicyData(_Strict):
     version: int
     tools: dict[str, ToolRule]
@@ -108,6 +115,7 @@ class PolicyData(_Strict):
     agents: dict[str, list[str]]
     environments: dict[str, EnvironmentRule]
     required_roles: dict[str, list[str]] = Field(default_factory=dict)
+    limits: LimitsRule = Field(default_factory=LimitsRule)
 
     @model_validator(mode="after")
     def _consistent(self) -> PolicyData:
@@ -181,6 +189,11 @@ class PolicyEngine:
 
         if risk is ToolRisk.MEDIUM and request.tool not in data.authorized_writes:
             reasons.append(DenyReason.WRITE_NOT_AUTHORIZED)
+
+        budget = data.limits.max_writes_per_request
+        writes = risk in (ToolRisk.MEDIUM, ToolRisk.HIGH)
+        if writes and budget is not None and request.writes_in_request >= budget:
+            reasons.append(DenyReason.WRITE_BUDGET_EXCEEDED)
 
         needed = data.required_roles.get(request.tool)
         if needed and not set(needed) & set(request.user.roles):

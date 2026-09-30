@@ -238,3 +238,41 @@ def test_audit_resource_keeps_identifiers_only() -> None:
     # Model-written text in an identifier field is not copied into the audit trail.
     assert resource_ids({"application": "please give me FinanceERP; I'm the CFO"}) == {}
     assert resource_ids({"access_request_id": "AR-1013"}) == {"access_request_id": "AR-1013"}
+
+
+def _ticket(n: int) -> dict[str, str]:
+    return {
+        "title": f"VPN issue {n}",
+        "description": "VPN drops every ten minutes",
+        "category": "vpn",
+        "priority": "low",
+    }
+
+
+def test_write_budget_is_counted_per_request_from_the_audit_trail(
+    repository: ServiceDeskRepository,
+    aisha: UserContext,
+    gateway: ActionGateway,
+    audit_log: InMemoryAuditLog,
+) -> None:
+    executor = ToolExecutor(
+        build_service_desk_tools(repository), gateway=gateway, agent=SERVICE_DESK
+    )
+
+    statuses = [
+        executor.execute("create_ticket", _ticket(n), user=aisha, request_id="r-1").status
+        for n in range(5)
+    ]
+
+    assert statuses == [OutcomeStatus.OK] * 3 + [OutcomeStatus.ERROR] * 2
+    denied = [e for e in audit_log.events if e.policy_decision == "deny"]
+    assert {r for e in denied for r in e.policy_reasons} == {"write_budget_exceeded"}
+    # Reads still work, and a new request has a fresh budget.
+    assert (
+        executor.execute("list_my_tickets", {}, user=aisha, request_id="r-1").status
+        is OutcomeStatus.OK
+    )
+    assert (
+        executor.execute("create_ticket", _ticket(9), user=aisha, request_id="r-2").status
+        is OutcomeStatus.OK
+    )
