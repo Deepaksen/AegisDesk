@@ -76,7 +76,6 @@ from aegisdesk.governance.factory import build_audit_log, build_gateway
 from aegisdesk.governance.policy import PolicyEngine, PolicyError, PolicyInput
 from aegisdesk.graphs.service_desk_graph import (
     NODE_START,
-    NotPausedError,
     ThreadAccessError,
     ThreadedGraphAgent,
     step_from_entry,
@@ -104,6 +103,7 @@ from aegisdesk.prompts.loader import PromptNotFoundError, load_prompt
 from aegisdesk.rag.answer import GroundedAnswerer
 from aegisdesk.rag.factory import build_embedder, build_retriever, build_store
 from aegisdesk.rag.ingestion.pipeline import ingest_directory
+from aegisdesk.runtime import AegisRuntime
 from aegisdesk.schemas.triage import TicketTriage
 from aegisdesk.tools.remote import McpGateway, McpTarget, ToolTransportError
 from aegisdesk.tools.transport import ToolFactory
@@ -614,6 +614,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--as", dest="employee_id", required=True, help="approver's employee ID")
         p.add_argument("--comment", default=None)
 
+    api = sub.add_parser("api", help="HTTP API (Milestone 10)")
+    api_sub = api.add_subparsers(dest="api_command", required=True)
+    p = api_sub.add_parser("serve", help="serve the API (OpenAPI docs at /docs)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+
     db = sub.add_parser("db", help="database setup (PostgreSQL)")
     db_sub = db.add_subparsers(dest="db_command", required=True)
     db_sub.add_parser("init", help="migrate, create checkpoint tables, load seed rows")
@@ -628,8 +634,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_mcp(settings: Settings, args: argparse.Namespace) -> int:
-    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
     if args.mcp_command == "serve":
+        # The servers share the configured stores (DATA_STORE=postgres in the compose
+        # stack) and verify recorded approvals before HIGH-risk provisioning.
+        repository = build_repository(settings)
         if settings.mcp_token_secret is None:
             print("Configuration error: set MCP_TOKEN_SECRET (32+ characters)", file=sys.stderr)
             return 2
@@ -640,7 +648,7 @@ def cmd_mcp(settings: Settings, args: argparse.Namespace) -> int:
         app = build_http_app(
             repository,
             settings.mcp_token_secret.get_secret_value(),
-            gateway=build_gateway(settings),
+            gateway=build_gateway(settings, access_store=repository.access_store),
             host=args.host,
         )
         print(f"MCP servers: http://{args.host}:{args.port}/read/mcp, /action/mcp")
@@ -648,6 +656,7 @@ def cmd_mcp(settings: Settings, args: argparse.Namespace) -> int:
         return 0
 
     # Discovery needs no token: listing tools reveals no user data.
+    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
     targets: dict[McpServerName, McpTarget]
     if args.remote:
         targets = {
@@ -849,45 +858,27 @@ def cmd_approvals(settings: Settings, args: argparse.Namespace) -> int:
             print(_format_approval(service.get(args.approval_id, approver), repository))
             return 0
 
-        result = service.decide(
-            args.approval_id,
-            approver,
-            approve=args.approvals_command == "approve",
-            comment=args.comment,
-        )
+        # Decide, then resume the paused workflow: the same path the API uses.
+        with AegisRuntime.open(settings, repository=repository) as runtime:
+            decision = runtime.decide(
+                approver,
+                args.approval_id,
+                approve=args.approvals_command == "approve",
+                comment=args.comment,
+            )
     except ApprovalError as exc:
         print(f"Refused ({exc.category}): {exc}", file=sys.stderr)
         return 2
+    result = decision.result
     print(_format_approval(result.approval, repository))
     if not result.changed:
         print("  (already recorded; nothing changed)")
-    if result.request.status.is_open:
-        print(f"  {result.request.request_id} still waits for other approvals.")
-        return 0
-    return _resume_thread(settings, repository, result.request.thread_id)
-
-
-def _resume_thread(
-    settings: Settings, repository: ServiceDeskRepository, thread_id: str | None
-) -> int:
-    if thread_id is None:
-        print("  No conversation to resume (the request was not made through the assistant).")
-        return 0
-    with (
-        open_checkpointer(settings) as checkpointer,
-        ToolFactory.from_settings(settings, repository) as tool_factory,
-    ):
-        agent = build_supervisor_agent(
-            settings, repository, checkpointer=checkpointer, tool_factory=tool_factory
-        )
-        try:
-            run = agent.resume(thread_id)
-        except NotPausedError:
-            print(f"  Thread {thread_id} is not paused (already resumed).")
-            return 0
-    print(f"Resumed thread {thread_id}:")
-    print(f"Assistant: {run.answer}")
-    _print_trace(run.trace_id)
+    if decision.note:
+        print(f"  {decision.note}")
+    if decision.resumed is not None:
+        print(f"Resumed thread {decision.resumed.thread_id}:")
+        print(f"Assistant: {decision.resumed.answer}")
+        _print_trace(decision.resumed.trace_id)
     return 0
 
 
@@ -940,6 +931,16 @@ def _configure_observability(settings: Settings, args: argparse.Namespace) -> Se
     return settings
 
 
+def cmd_api(settings: Settings, args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from aegisdesk.api.app import create_app
+
+    print(f"AegisDesk API: http://{args.host}:{args.port}/docs")
+    uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="info")
+    return 0
+
+
 def cmd_telemetry(settings: Settings, _args: argparse.Namespace) -> int:
     """Where telemetry goes, without printing any secret."""
     report = {
@@ -973,6 +974,7 @@ COMMANDS = {
     "approvals": cmd_approvals,
     "telemetry": cmd_telemetry,
     "db": cmd_db,
+    "api": cmd_api,
 }
 
 

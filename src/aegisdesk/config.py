@@ -15,7 +15,7 @@ from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 
 __all__ = ["TelemetryExporter"]  # re-exported for settings users
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -131,6 +131,12 @@ class Settings(BaseSettings):
     mcp_read_url: str = "http://127.0.0.1:8765/read/mcp"
     mcp_action_url: str = "http://127.0.0.1:8765/action/mcp"
     mcp_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+
+    @field_validator("mcp_token_secret", mode="before")
+    @classmethod
+    def _empty_secret_is_unset(cls, value: object) -> object:
+        # `MCP_TOKEN_SECRET=` (e.g. an unset compose variable) means "not configured".
+        return None if value == "" else value
 
     # Governance (Milestone 6)
     policy_path: Path = PROJECT_ROOT / "config" / "policy.yaml"

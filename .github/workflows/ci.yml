@@ -47,7 +47,11 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check
-        run: uv run mypy src tests
+        run: uv run mypy src tests apps
+
+      # Milestone 10: the compose stack must stay valid (services, anchors, variables).
+      - name: Compose file
+        run: docker compose config --quiet
 
       # Alembic migrations + LangGraph checkpoint tables + seed rows (idempotent).
       - name: Database setup

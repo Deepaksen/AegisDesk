@@ -14,9 +14,9 @@ This document describes the **target** architecture and marks what has been buil
 | M7 Human approval | ✅ built ([notes](milestones/M7-approvals.md), [design](APPROVALS_DESIGN.md)) |
 | M8 Observability | ✅ built ([notes](milestones/M8-observability.md), [design](OBSERVABILITY.md)) |
 | M9 Evaluations | ✅ built ([notes](milestones/M9-evaluations.md), [design](EVALUATION.md)) |
-| M10 API + UI | not started |
+| M10 API + UI | ✅ built ([notes](milestones/M10-api-ui.md), [API](API.md), [runbook](RUNBOOK.md)) |
 | M11 Reliability | not started |
-| M12 CI/CD | partial: lint, type and test gates from M0; RAG gate from M3; golden and adversarial safety + regression gates from M9 |
+| M12 CI/CD | partial: lint, type and test gates from M0; RAG gate from M3; golden and adversarial safety + regression gates from M9; compose validation from M10 |
 
 ## Guiding principle
 
@@ -57,7 +57,28 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M9
+## What exists after M10
+
+### API, UI and deployment
+
+```
+ Browser ─► Streamlit UI (:8501) ─HTTP─► FastAPI (:8000)  X-Employee-Id ◄─ authenticating gateway
+                ApiClient only            │ /api/v1: threads, messages (JSON | SSE), approvals, audit, me
+                                          │ /health /ready /metrics /docs      problem+json errors
+                                          ▼
+                                   AegisRuntime (one per process; also used by the CLI)
+                                          │
+        supervisor graph ─► gateway + policy ─► MCP servers (:8765, internal) ─┐
+               │ checkpoints, audit, access data, pgvector                      │
+               └──────────────────────────► PostgreSQL ◄───────────────────────┘
+ docker compose up: postgres → migrate → mcp → api → ui   (+ --profile observability)
+```
+
+* **API** (`src/aegisdesk/api/`): a thin FastAPI adapter over `AegisRuntime` (`src/aegisdesk/runtime.py`). Identity comes only from the gateway header, validated against the directory; bodies cannot carry it. Streaming is SSE with code-built activity summaries (no chain-of-thought). Idempotency keys map to request IDs. See [API.md](API.md), [ADR 0015](adr/0015-fastapi-thin-adapter-trusted-header.md).
+* **UI** (`apps/ui/`): Streamlit, a pure HTTP client with employee, manager and audit views. See [ADR 0016](adr/0016-streamlit-initially.md).
+* **Deployment** (`Dockerfile`, `docker-compose.yml`): one image; MCP servers on the internal network sharing the PostgreSQL stores. See [RUNBOOK.md](RUNBOOK.md).
+
+From M9:
 
 ### Evaluation lifecycle
 
@@ -243,11 +264,11 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `approvals/` | `src/aegisdesk/approvals/` | M7 |
 | `observability/`, `infrastructure/` | `src/aegisdesk/observability/`, `infra/observability/` (+ Grafana dashboards) | M8 |
 | `evals/` | `evals/datasets/`, `evals/adversarial/`, `evals/regression/` (baselines); `src/aegisdesk/evals/` (runner, evaluators, judge) | M3 (retrieval); M9 (full suite) |
-| `apps/api`, `apps/ui` | … | M10 |
+| `apps/api`, `apps/ui` | `src/aegisdesk/api/` (installable, imported by tests and the CLI), `apps/ui/streamlit_app.py` (+ `src/aegisdesk/ui/client.py`); `Dockerfile`, `docker-compose.yml` | M10 |
 
 ## Diagrams still to come
 
-Written as each milestone lands: workflow (M7), observability architecture (M8), evaluation lifecycle (M9); deployment (M10–M12).
+Written as each milestone lands: workflow (M7), observability architecture (M8), evaluation lifecycle (M9), API/UI and deployment (M10); reliability (M11) and release pipeline (M12) next.
 
 ## Decisions
 

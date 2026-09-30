@@ -43,6 +43,10 @@ ALLOWED_KEYS = frozenset(
         "rpc.system",
         "rpc.method",
         "server.address",
+        # HTTP server spans (Milestone 10): route templates, never raw paths or queries.
+        "http.request.method",
+        "http.route",
+        "http.response.status_code",
     }
 )
 

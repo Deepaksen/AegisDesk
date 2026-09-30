@@ -82,3 +82,11 @@ def test_compose_mounts_existing_files() -> None:
             source = volume.split(":")[0]
             if source.startswith("./"):
                 assert (PROJECT_ROOT / source).exists(), source
+
+
+def test_prometheus_scrapes_the_collector_and_the_api() -> None:
+    config = _yaml(INFRA / "prometheus.yml")
+    targets = {
+        t for job in config["scrape_configs"] for s in job["static_configs"] for t in s["targets"]
+    }
+    assert targets == {"otel-collector:8889", "api:8000"}

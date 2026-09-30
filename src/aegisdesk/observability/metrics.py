@@ -39,6 +39,8 @@ class Instruments:
     llm_latency: Histogram
     task_latency: Histogram
     rag_latency: Histogram
+    http_requests: Counter
+    http_latency: Histogram
 
 
 # (name, kind, unit, description): the single catalogue used by code, docs and tests.
@@ -59,6 +61,8 @@ CATALOGUE: list[tuple[str, str, str, str]] = [
     ("llm.latency", "histogram", "s", "Model call latency"),
     ("task.latency", "histogram", "s", "End-to-end request latency"),
     ("rag.retrieval.latency", "histogram", "s", "Retrieval latency"),
+    ("http.requests", "counter", "{request}", "API requests, by method, route and status"),
+    ("http.latency", "histogram", "s", "API request latency, by method and route"),
 ]
 
 
@@ -111,5 +115,7 @@ def instruments() -> Instruments:
             llm_latency=made["llm.latency"],
             task_latency=made["task.latency"],
             rag_latency=made["rag.retrieval.latency"],
+            http_requests=made["http.requests"],
+            http_latency=made["http.latency"],
         )
     return _instruments

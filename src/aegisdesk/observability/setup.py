@@ -12,6 +12,10 @@
 
 Every exporter sits behind `RedactingSpanProcessor`.
 
+With `prometheus=True` (the API server, Milestone 10) metrics are also kept in a
+Prometheus registry that `GET /metrics` serves, so Prometheus can scrape the
+service directly as well as receive metrics through the collector.
+
 We keep our own provider references instead of relying only on OpenTelemetry's
 global ones (which can be set once per process), so tests can swap in-memory
 exporters for each test.
@@ -26,6 +30,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from opentelemetry import metrics, trace
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import (
     ConsoleMetricExporter,
@@ -41,6 +46,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
+from prometheus_client import CollectorRegistry
 
 from aegisdesk.observability.redaction import RedactingSpanProcessor
 
@@ -79,6 +85,7 @@ class _State:
         default_factory=lambda: MeterProvider(shutdown_on_exit=False)
     )
     tree: TreeExporter | None = None
+    prometheus: CollectorRegistry | None = None
     configured: bool = False
 
 
@@ -92,6 +99,7 @@ def configure_telemetry(
     environment: str = "development",
     span_exporter: SpanExporter | None = None,
     metric_reader: MetricReader | None = None,
+    prometheus: bool = False,
 ) -> None:
     """(Re)configure telemetry for this process. Tests pass in-memory exporters."""
     shutdown_telemetry()
@@ -127,17 +135,24 @@ def configure_telemetry(
         tracer_provider.add_span_processor(
             RedactingSpanProcessor(BatchSpanProcessor(OTLPSpanExporter()))
         )
-        readers.append(
-            PeriodicExportingMetricReader(OTLPMetricExporter(), export_interval_millis=5000)
-        )
+        if not prometheus:  # a scraped process sends traces only (no double counting)
+            readers.append(
+                PeriodicExportingMetricReader(OTLPMetricExporter(), export_interval_millis=5000)
+            )
     if metric_reader is not None:
         readers.append(metric_reader)
+    registry = None
+    if prometheus:
+        # A private registry per configuration: reconfiguring never double-registers.
+        registry = CollectorRegistry()
+        readers.append(PrometheusMetricReader(registry=registry))
 
     _state.tracer_provider = tracer_provider
     _state.meter_provider = MeterProvider(
         resource=resource, metric_readers=readers, shutdown_on_exit=False
     )
     _state.tree = tree
+    _state.prometheus = registry
     _state.configured = True
     # Also register globally, so libraries using the global API join our traces.
     _set_global(tracer_provider, _state.meter_provider)
@@ -165,6 +180,10 @@ def meter_provider() -> MeterProvider:
 
 def tree_exporter() -> TreeExporter | None:
     return _state.tree
+
+
+def prometheus_registry() -> CollectorRegistry | None:
+    return _state.prometheus
 
 
 def shutdown_telemetry() -> None:

@@ -18,6 +18,7 @@ All data is synthetic.
 | M7 Human approval ✅ | Sensitive access requests pause the LangGraph workflow (`interrupt`), survive restarts (PostgreSQL access store + checkpointer), and resume on the approver's decision; approver rules with separation of duties, expiry and idempotency; provisioning only by the workflow identity with gateway-verified approval evidence; audited end to end | [M7](docs/milestones/M7-approvals.md) |
 | M8 Observability ✅ | OpenTelemetry traces (one trace per request, across MCP servers) with GenAI attributes, the spec's metrics, JSON logs with trace context, optional LangSmith, allowlist redaction; Collector + Tempo + Prometheus + Grafana dashboard (docker compose profile); `--trace` span trees; injected faults for debugging | [M8](docs/milestones/M8-observability.md) |
 | M9 Evaluations ✅ | 60-case golden dataset and an 8-case adversarial suite run through the real system; deterministic, RAG and trajectory checks from trajectories, audit, spans and data changes; latency, tokens and cost; multi-agent vs single-agent comparison; safety and regression gates in CI; opt-in LLM judge; per-request write budget (found by the adversarial suite) | [M9](docs/milestones/M9-evaluations.md) |
+| M10 API + UI ✅ | FastAPI service (threads, messages with SSE streaming, approvals, audit, health, readiness, Prometheus metrics, OpenAPI) as a thin adapter over a shared runtime; gateway-header identity; idempotency keys; problem+json errors; Streamlit employee, manager and audit views over HTTP; Dockerfile and full `docker compose up` stack | [M10](docs/milestones/M10-api-ui.md) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
@@ -55,6 +56,12 @@ uv run aegisdesk db init                                            # migrations
 uv run aegisdesk agent --as E1004 "Please create an access request for FinanceERP for month-end reporting"
 uv run aegisdesk approvals list --as E1010
 uv run aegisdesk approvals approve AP-0001 --as E1010 --comment "ok"   # resumes the employee's thread
+
+# API + UI (M10)
+uv run aegisdesk api serve                                  # http://127.0.0.1:8000/docs
+uv run streamlit run apps/ui/streamlit_app.py               # http://localhost:8501
+curl -s -X POST -H 'X-Employee-Id: E1004' localhost:8000/api/v1/threads
+docker compose up --build                                   # the whole platform (see docs/RUNBOOK.md)
 
 # Evaluations (M9)
 uv run aegisdesk eval golden --config multi --compare single          # 60 cases, two versions side by side
@@ -109,4 +116,6 @@ uv run pytest -m live         # real providers; skips any without a key or a run
 * [`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md): agents, tools, handoffs and isolation
 * [`docs/RAG_DESIGN.md`](docs/RAG_DESIGN.md): knowledge base and retrieval design
 * [`docs/EVALUATION.md`](docs/EVALUATION.md): datasets, checks, metrics, gates and the judge
+* [`docs/API.md`](docs/API.md): the HTTP API (endpoints, auth, streaming, errors, idempotency)
+* [`docs/RUNBOOK.md`](docs/RUNBOOK.md): starting, checking and troubleshooting the platform
 * [`docs/adr/`](docs/adr/): architecture decision records
