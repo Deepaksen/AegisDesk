@@ -17,6 +17,8 @@
     aegisdesk eval rag                       retrieval evaluation (recall, MRR, access)
     aegisdesk mcp serve                      run the read and action MCP servers (HTTP)
     aegisdesk mcp tools                      MCP discovery: list each server's tools
+    aegisdesk policy check --as E1004 --agent knowledge --tool create_ticket
+    aegisdesk audit --user E1004             audit events (AUDIT_STORE=postgres to persist)
 
 Every command prints the provider, model, prompt version, token usage and
 latency of each model call, because those are the facts later milestones will
@@ -58,12 +60,15 @@ from aegisdesk.config import (
 )
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
+from aegisdesk.governance.factory import build_audit_log, build_gateway
+from aegisdesk.governance.policy import PolicyEngine, PolicyError, PolicyInput
 from aegisdesk.graphs.service_desk_graph import (
     NODE_START,
     ThreadAccessError,
     ThreadedGraphAgent,
     step_from_entry,
 )
+from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import AuthenticationError, UserContext, authenticate
 from aegisdesk.llm.allowlist import ModelNotAllowedError
 from aegisdesk.llm.client import CallMetadata, LLMClient, StructuredOutputError
@@ -537,6 +542,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="query the HTTP servers (MCP_READ_URL/MCP_ACTION_URL) instead of in-process",
     )
 
+    pol = sub.add_parser("policy", help="governance policy (Milestone 6)")
+    pol_sub = pol.add_subparsers(dest="policy_command", required=True)
+    p = pol_sub.add_parser("check", help="ask the policy engine for one decision")
+    p.add_argument("--as", dest="employee_id", required=True, help="employee ID")
+    p.add_argument("--agent", required=True, help="agent id, e.g. knowledge, access")
+    p.add_argument("--tool", required=True)
+    p.add_argument("--environment", help="where the call is enforced (default AEGIS_ENV)")
+    p.add_argument("--agent-environment", help="the agent's claimed environment")
+
+    p = sub.add_parser("audit", help="list audit events (use AUDIT_STORE=postgres)")
+    p.add_argument("--request", help="only this request ID")
+    p.add_argument("--user", help="only this employee ID")
+    p.add_argument("--limit", type=int, default=50)
+
     p = sub.add_parser("thread", help="show a stored conversation thread")
     p.add_argument("thread_id")
     p.add_argument("--as", dest="employee_id", required=True, help="employee ID to sign in as")
@@ -554,7 +573,10 @@ def cmd_mcp(settings: Settings, args: argparse.Namespace) -> int:
         from aegisdesk.mcp_servers.http import build_http_app
 
         app = build_http_app(
-            repository, settings.mcp_token_secret.get_secret_value(), host=args.host
+            repository,
+            settings.mcp_token_secret.get_secret_value(),
+            gateway=build_gateway(settings),
+            host=args.host,
         )
         print(f"MCP servers: http://{args.host}:{args.port}/read/mcp, /action/mcp")
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
@@ -568,7 +590,9 @@ def cmd_mcp(settings: Settings, args: argparse.Namespace) -> int:
             McpServerName.ACTION: settings.mcp_action_url,
         }
     else:
-        targets = dict(build_servers(repository, "discovery-only-" + "x" * 32))
+        targets = dict(
+            build_servers(repository, "discovery-only-" + "x" * 32, gateway=build_gateway(settings))
+        )
     with McpGateway(targets, timeout_seconds=settings.mcp_timeout_seconds) as gateway:
         for server in McpServerName:
             try:
@@ -588,6 +612,52 @@ def cmd_mcp(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_policy(settings: Settings, args: argparse.Namespace) -> int:
+    """Ask the policy engine directly, without any model or tool involved."""
+    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    user = authenticate(repository, args.employee_id)
+    engine = PolicyEngine.from_file(settings.policy_path)
+    environment = args.environment or settings.aegis_env.value
+    agent = AgentIdentity(
+        agent_id=args.agent,
+        agent_version="cli",
+        agent_type="specialist",
+        environment=args.agent_environment or environment,
+    )
+    decision = engine.evaluate(
+        PolicyInput(tool=args.tool, user=user, agent=agent, environment=environment)
+    )
+    risk = decision.risk.value if decision.risk else "unclassified"
+    print(
+        f"{decision.decision.value.upper()}  tool={args.tool} agent={args.agent} "
+        f"user={user.employee_id} environment={environment} risk={risk}"
+    )
+    for reason in decision.reasons:
+        print(f"  reason: {reason}")
+    print(f"  policy: {decision.policy_version} ({settings.policy_path.name})")
+    return 0 if decision.allowed else 1
+
+
+def cmd_audit(settings: Settings, args: argparse.Namespace) -> int:
+    audit = build_audit_log(settings)
+    events = audit.query(request_id=args.request, user_id=args.user, limit=args.limit)
+    if not events:
+        store = settings.audit_store.value
+        print(f"No audit events (AUDIT_STORE={store}; the memory store is per process).")
+        return 0
+    for e in events:
+        agent = f"{e.agent_id}@{e.agent_version}" if e.agent_id else "-"
+        reasons = f" reasons={','.join(e.policy_reasons)}" if e.policy_reasons else ""
+        resource = f" resource={json.dumps(e.resource)}" if e.resource else ""
+        print(
+            f"{e.occurred_at:%Y-%m-%d %H:%M:%S} {e.phase.value:<8} {e.tool:<24} "
+            f"user={e.user_id} agent={agent} env={e.environment} "
+            f"decision={e.policy_decision} outcome={e.outcome}{reasons}{resource} "
+            f"request_id={e.request_id}" + (f" thread_id={e.thread_id}" if e.thread_id else "")
+        )
+    return 0
+
+
 COMMANDS = {
     "config": cmd_config,
     "chat": cmd_chat,
@@ -599,6 +669,8 @@ COMMANDS = {
     "ask": cmd_ask,
     "eval": cmd_eval,
     "mcp": cmd_mcp,
+    "policy": cmd_policy,
+    "audit": cmd_audit,
 }
 
 
@@ -614,6 +686,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ModelNotAllowedError,
         ModelConfigurationError,
         PromptNotFoundError,
+        PolicyError,
     ) as exc:
         # Configuration mistakes are reported plainly; unexpected errors keep their traceback.
         print(f"Configuration error: {exc}", file=sys.stderr)

@@ -20,7 +20,9 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from aegisdesk.agents.loop import AgentLimits, ToolCallingAgent
 from aegisdesk.config import Settings
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.governance.factory import build_gateway
 from aegisdesk.graphs.service_desk_graph import ServiceDeskGraphAgent
+from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.llm.factory import build_chat_model
 from aegisdesk.prompts.loader import load_prompt
 from aegisdesk.rag.factory import build_retriever
@@ -30,6 +32,8 @@ from aegisdesk.tools.knowledge import build_knowledge_tools
 from aegisdesk.tools.service_desk import build_service_desk_tools
 
 AGENT_NAME = "service_desk"
+# Policy identity of the single agent (config/policy.yaml: service_desk_single).
+POLICY_AGENT_ID = "service_desk_single"
 AGENT_VERSION = "0.2.0"
 PROMPT_NAME = "service_desk"
 DEFAULT_PROMPT_VERSION = "v2"
@@ -46,7 +50,13 @@ def _executor(
     tools = build_service_desk_tools(repository)
     if prompt_version in _KNOWLEDGE_PROMPT_VERSIONS:
         tools += build_knowledge_tools(retriever or build_retriever(settings))
-    return ToolExecutor(tools)
+    identity = AgentIdentity(
+        agent_id=POLICY_AGENT_ID,
+        agent_version=AGENT_VERSION,
+        agent_type="single_agent",
+        environment=settings.aegis_env.value,
+    )
+    return ToolExecutor(tools, gateway=build_gateway(settings), agent=identity)
 
 
 def build_service_desk_agent(

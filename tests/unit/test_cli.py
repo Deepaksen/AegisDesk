@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -158,3 +159,35 @@ def test_agent_answers_policy_questions_from_the_knowledge_base(
     out = capsys.readouterr().out
     assert "search_knowledge_base" in out
     assert "DOC-VPN-001#05" in out
+
+
+def test_policy_check_explains_a_denial(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(
+        ["policy", "check", "--as", "E1004", "--agent", "knowledge", "--tool", "create_ticket"]
+    )
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert out.startswith("DENY") and "reason: agent_not_authorized_for_tool" in out
+
+
+def test_policy_check_allows_an_authorized_call(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(
+        ["policy", "check", "--as", "E1004", "--agent", "access", "--tool", "create_access_request"]
+    )
+
+    assert code == 0 and capsys.readouterr().out.startswith("ALLOW")
+
+
+def test_broken_policy_file_is_a_configuration_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("POLICY_PATH", str(tmp_path / "missing.yaml"))
+
+    assert main(["agent", "--as", "E1004", "--quiet", "What laptop do I have?"]) == 2
+    assert "cannot load policy" in capsys.readouterr().err
+
+
+def test_audit_with_memory_store_explains_itself(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["audit", "--user", "E1004"]) == 0
+    assert "memory store is per process" in capsys.readouterr().out

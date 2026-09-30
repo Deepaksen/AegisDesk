@@ -14,6 +14,7 @@ names where they exist:
     iss, aud, sub, iat, exp, jti     (RFC 7519)
     act = {sub: agent_id, ...}       (RFC 8693 "actor": who acts on the user's behalf)
     rid                              AegisDesk request id
+    tid (optional)                   conversation thread id, for audit
     roles, department, manager_id    user claims from the identity provider
 
 `aud` is the target server, so a token minted for the read server is refused
@@ -55,6 +56,7 @@ class CallerContext:
     agent: AgentIdentity
     request_id: str
     token_id: str
+    thread_id: str | None = None
 
 
 class TokenIssuer:
@@ -65,7 +67,13 @@ class TokenIssuer:
         self._ttl = ttl_seconds
 
     def issue(
-        self, *, user: UserContext, agent: AgentIdentity, request_id: str, audience: str
+        self,
+        *,
+        user: UserContext,
+        agent: AgentIdentity,
+        request_id: str,
+        audience: str,
+        thread_id: str | None = None,
     ) -> str:
         now = int(time.time())
         claims: dict[str, Any] = {
@@ -86,6 +94,8 @@ class TokenIssuer:
                 "env": agent.environment,
             },
         }
+        if thread_id is not None:
+            claims["tid"] = thread_id  # conversation thread, for audit
         return jwt.encode(claims, self._secret, algorithm=_ALGORITHM)
 
 
@@ -128,6 +138,7 @@ class TokenVerifier:
                 ),
                 request_id=str(claims["rid"]),
                 token_id=str(claims["jti"]),
+                thread_id=str(claims["tid"]) if claims.get("tid") is not None else None,
             )
         except jwt.ExpiredSignatureError as exc:
             raise TokenError("delegation token expired") from exc

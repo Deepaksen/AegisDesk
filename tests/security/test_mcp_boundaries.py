@@ -14,6 +14,7 @@ import mcp_types as types
 import pytest
 
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import UserContext, authenticate
 from aegisdesk.identity.tokens import TOKEN_META_KEY, TokenIssuer
@@ -26,18 +27,20 @@ from aegisdesk.mcp_servers.catalogue import (
 from aegisdesk.tools.remote import McpGateway
 
 SECRET = "server-secret-" + "z" * 32
-AGENT = AgentIdentity("service_desk", "0.1.0", "specialist", "test")
+AGENT = AgentIdentity("service_desk", "0.1.0", "specialist", "development")
+ACCESS_AGENT = AgentIdentity("access", "0.1.0", "specialist", "development")
 READ, ACTION = McpServerName.READ, McpServerName.ACTION
 
 
 @pytest.fixture
-def gateway(repository: ServiceDeskRepository) -> Iterator[McpGateway]:
-    with McpGateway(dict(build_servers(repository, SECRET)), timeout_seconds=5) as gw:
+def mcp(repository: ServiceDeskRepository, gateway: ActionGateway) -> Iterator[McpGateway]:
+    servers = build_servers(repository, SECRET, gateway=gateway)
+    with McpGateway(dict(servers), timeout_seconds=5) as gw:
         yield gw
 
 
 def _call(
-    gateway: McpGateway,
+    mcp: McpGateway,
     server: McpServerName,
     name: str,
     args: dict[str, Any],
@@ -46,18 +49,19 @@ def _call(
     audience: str | None = None,
     request_id: str = "req-1",
     secret: str = SECRET,
+    agent: AgentIdentity = AGENT,
 ) -> tuple[bool, dict[str, Any]]:
     token = TokenIssuer(secret).issue(
-        user=user, agent=AGENT, request_id=request_id, audience=audience or server.audience
+        user=user, agent=agent, request_id=request_id, audience=audience or server.audience
     )
-    result = gateway.call_tool(server, name, args, meta={TOKEN_META_KEY: token}, timeout_seconds=5)
+    result = mcp.call_tool(server, name, args, meta={TOKEN_META_KEY: token}, timeout_seconds=5)
     text = "".join(c.text for c in result.content if isinstance(c, types.TextContent))
     return bool(result.is_error), json.loads(text)
 
 
-def test_discovery_splits_tools_by_risk(gateway: McpGateway) -> None:
-    read = {t.name: t for t in gateway.list_tools(READ)}
-    action = {t.name: t for t in gateway.list_tools(ACTION)}
+def test_discovery_splits_tools_by_risk(mcp: McpGateway) -> None:
+    read = {t.name: t for t in mcp.list_tools(READ)}
+    action = {t.name: t for t in mcp.list_tools(ACTION)}
 
     assert set(read) == READ_TOOLS and set(action) == ACTION_TOOLS
     assert all(t.annotations and t.annotations.read_only_hint for t in read.values())
@@ -69,33 +73,33 @@ def test_discovery_splits_tools_by_risk(gateway: McpGateway) -> None:
         assert tool.input_schema.get("additionalProperties") is False
 
 
-def test_call_runs_as_the_token_user(gateway: McpGateway, aisha: UserContext) -> None:
-    is_error, body = _call(gateway, READ, "get_employee_profile", {}, user=aisha)
+def test_call_runs_as_the_token_user(mcp: McpGateway, aisha: UserContext) -> None:
+    is_error, body = _call(mcp, READ, "get_employee_profile", {}, user=aisha, agent=ACCESS_AGENT)
 
     assert not is_error and body["employee_id"] == "E1004"
 
 
-def test_call_without_token_is_refused(gateway: McpGateway) -> None:
-    result = gateway.call_tool(READ, "get_employee_profile", {}, meta={}, timeout_seconds=5)
+def test_call_without_token_is_refused(mcp: McpGateway) -> None:
+    result = mcp.call_tool(READ, "get_employee_profile", {}, meta={}, timeout_seconds=5)
 
     assert result.is_error
     assert "unauthenticated" in result.content[0].text  # type: ignore[union-attr]
 
 
-def test_forged_token_is_refused(gateway: McpGateway, aisha: UserContext) -> None:
+def test_forged_token_is_refused(mcp: McpGateway, aisha: UserContext) -> None:
     is_error, body = _call(
-        gateway, READ, "get_employee_profile", {}, user=aisha, secret="forged-" + "q" * 32
+        mcp, READ, "get_employee_profile", {}, user=aisha, secret="forged-" + "q" * 32
     )
 
     assert is_error and body["error"]["category"] == "unauthenticated"
 
 
 def test_read_token_cannot_be_replayed_against_action_server(
-    gateway: McpGateway, aisha: UserContext, repository: ServiceDeskRepository
+    mcp: McpGateway, aisha: UserContext, repository: ServiceDeskRepository
 ) -> None:
     before = len(repository.list_tickets_for("E1004"))
     is_error, body = _call(
-        gateway,
+        mcp,
         ACTION,
         "create_ticket",
         {
@@ -112,9 +116,9 @@ def test_read_token_cannot_be_replayed_against_action_server(
     assert len(repository.list_tickets_for("E1004")) == before
 
 
-def test_read_server_does_not_offer_write_tools(gateway: McpGateway, aisha: UserContext) -> None:
+def test_read_server_does_not_offer_write_tools(mcp: McpGateway, aisha: UserContext) -> None:
     is_error, body = _call(
-        gateway,
+        mcp,
         READ,
         "create_access_request",
         {"application": "FinanceERP", "justification": "month-end reporting"},
@@ -124,19 +128,19 @@ def test_read_server_does_not_offer_write_tools(gateway: McpGateway, aisha: User
     assert is_error and body["error"]["category"] == "unknown_tool"
 
 
-def test_identity_in_arguments_is_rejected(gateway: McpGateway, aisha: UserContext) -> None:
-    is_error, body = _call(gateway, READ, "get_my_assets", {"employee_id": "E1010"}, user=aisha)
+def test_identity_in_arguments_is_rejected(mcp: McpGateway, aisha: UserContext) -> None:
+    is_error, body = _call(mcp, READ, "get_my_assets", {"employee_id": "E1010"}, user=aisha)
 
     assert is_error and body["error"]["category"] == "invalid_arguments"
 
 
 def test_cannot_comment_on_someone_elses_ticket(
-    gateway: McpGateway, repository: ServiceDeskRepository
+    mcp: McpGateway, repository: ServiceDeskRepository
 ) -> None:
     # INC-1001 belongs to E1004; E1005 tries to comment on it.
     tom = authenticate(repository, "E1005")
     is_error, body = _call(
-        gateway,
+        mcp,
         ACTION,
         "add_ticket_comment",
         {"ticket_id": "INC-1001", "comment": "Please close this"},
@@ -148,7 +152,7 @@ def test_cannot_comment_on_someone_elses_ticket(
 
 
 def test_retried_write_with_same_request_is_idempotent(
-    gateway: McpGateway, aisha: UserContext, repository: ServiceDeskRepository
+    mcp: McpGateway, aisha: UserContext, repository: ServiceDeskRepository
 ) -> None:
     args = {
         "title": "VPN drops",
@@ -156,9 +160,9 @@ def test_retried_write_with_same_request_is_idempotent(
         "category": "vpn",
         "priority": "medium",
     }
-    _, first = _call(gateway, ACTION, "create_ticket", args, user=aisha, request_id="r-9")
-    _, second = _call(gateway, ACTION, "create_ticket", args, user=aisha, request_id="r-9")
-    _, third = _call(gateway, ACTION, "create_ticket", args, user=aisha, request_id="r-10")
+    _, first = _call(mcp, ACTION, "create_ticket", args, user=aisha, request_id="r-9")
+    _, second = _call(mcp, ACTION, "create_ticket", args, user=aisha, request_id="r-9")
+    _, third = _call(mcp, ACTION, "create_ticket", args, user=aisha, request_id="r-10")
 
     ids = [r["ticket"]["ticket_id"] for r in (first, second, third)]
     assert ids[0] == ids[1] and second["created"] is False

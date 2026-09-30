@@ -10,7 +10,7 @@ This document describes the **target** architecture and marks what has been buil
 | M3 RAG | ✅ built ([notes](milestones/M3-rag.md), [design](RAG_DESIGN.md)) |
 | M4 Multi-agent | ✅ built ([notes](milestones/M4-multi-agent.md), [design](AGENT_DESIGN.md)) |
 | M5 MCP | ✅ built ([notes](milestones/M5-mcp.md), [design](MCP_DESIGN.md)) |
-| M6 Governance | not started |
+| M6 Governance | ✅ built ([notes](milestones/M6-governance.md), [design](GOVERNANCE_DESIGN.md)) |
 | M7 Human approval | not started |
 | M8 Observability | not started |
 | M9 Evaluations | not started |
@@ -57,7 +57,22 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M5
+## What exists after M6
+
+### Governance: every tool call
+
+```
+tool request ─► allowlist ─► schema ─► ACTION GATEWAY ────────────────► handler ─► audit outcome
+                                        policy(agent, user, tool, env)
+                                        audit decision (before anything runs)
+                                        DENY → policy_denied · HIGH → approval_required (M7)
+```
+
+* **Policy** (`config/policy.yaml`, `src/aegisdesk/governance/`): risk classes, per-agent grants, authorized writes, forbidden actions, environment rules. Deterministic engine, fail closed, all deny reasons reported. See [GOVERNANCE_DESIGN.md](GOVERNANCE_DESIGN.md) and [ADR 0009](adr/0009-deterministic-policy-engine.md).
+* **Enforcement points:** the host's `ToolExecutor` for local tools, and the MCP servers for enterprise tools, using the agent from the verified token.
+* **Audit** (`src/aegisdesk/audit/`, migration 0002): decision + outcome events per call. In PostgreSQL, triggers reject UPDATE, DELETE and TRUNCATE. See [ADR 0010](adr/0010-append-only-audit-store.md).
+
+From M5:
 
 ### MCP interactions
 
@@ -179,7 +194,7 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `graphs/`, `agents/` | `src/aegisdesk/graphs/`, `src/aegisdesk/agents/` | M1–M2; supervisor + specialists M4 |
 | `rag/` | `src/aegisdesk/rag/`; documents in `data/documents/` | M3 |
 | `mcp_servers/` | `src/aegisdesk/mcp_servers/`; client side in `src/aegisdesk/tools/remote.py` | M5 |
-| `governance/` | `src/aegisdesk/governance/` | M6 |
+| `governance/` | `src/aegisdesk/governance/` (policy data in `config/policy.yaml`); audit in `src/aegisdesk/audit/` | M6 |
 | `persistence/` | `src/aegisdesk/persistence/` (checkpointer) | M2 |
 | `migrations/` | `migrations/` (Alembic), `alembic.ini` | M3 |
 | `approvals/` | … | M7 |
@@ -189,7 +204,7 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 
 ## Diagrams still to come
 
-Written as each milestone lands: the full security boundary (M6; its first version is described above), approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
+Written as each milestone lands: approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
 
 ## Decisions
 

@@ -25,6 +25,7 @@ from aegisdesk.agents.knowledge import check_knowledge_answer
 from aegisdesk.agents.loop import AgentLimits
 from aegisdesk.config import Settings
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.governance.factory import build_gateway
 from aegisdesk.graphs.service_desk_graph import ThreadedGraphAgent, build_tool_agent_graph
 from aegisdesk.graphs.supervisor_graph import (
     Specialist,
@@ -99,7 +100,7 @@ def build_supervisor_agent(
         max_steps=settings.agent_max_steps, max_tool_calls=settings.agent_max_tool_calls
     )
     tools = specialist_tools(repository, retriever)
-    tool_factory = tool_factory or ToolFactory()
+    tool_factory = tool_factory or ToolFactory(gateway=build_gateway(settings))
 
     specialists = {}
     for agent, (prompt_name, version) in PROMPTS.items():

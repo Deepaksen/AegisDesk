@@ -14,7 +14,11 @@ The executor decides what actually happens:
    the model gets a generic message with no stack traces or internals.
 5. **Output validation:** the handler's result must match the output schema.
 
-From Milestone 6, a policy check (OPA) is added between steps 3 and 4.
+From Milestone 6, an `ActionGateway` (policy decision + audit events) sits
+between validation and execution. A denied call, or one that needs human
+approval, never reaches the handler. Every production path builds its
+executor with a gateway; an executor without one is the ungoverned building
+block used only in unit tests.
 """
 
 from __future__ import annotations
@@ -23,15 +27,20 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
+from aegisdesk.governance.policy import Decision
+from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import UserContext
 from aegisdesk.tools.base import ToolAccess, ToolCallContext, ToolError, ToolSpec
+
+if TYPE_CHECKING:
+    from aegisdesk.governance.gateway import ActionGateway
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +74,13 @@ class ToolRunner(Protocol):
     def model_definitions(self) -> list[dict[str, Any]]: ...
 
     def execute(
-        self, name: str, args: dict[str, Any], *, user: UserContext, request_id: str
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None = None,
     ) -> ToolOutcome: ...
 
 
@@ -93,14 +108,20 @@ class CompositeToolRunner:
         return list(self._definitions)
 
     def execute(
-        self, name: str, args: dict[str, Any], *, user: UserContext, request_id: str
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None = None,
     ) -> ToolOutcome:
         runner = self._by_name.get(name)
         if runner is None:
             message = f"There is no tool named {name!r}."
             content = json.dumps({"error": {"category": "unknown_tool", "message": message}})
             return ToolOutcome(name, OutcomeStatus.ERROR, content, 0.0, "unknown_tool")
-        return runner.execute(name, args, user=user, request_id=request_id)
+        return runner.execute(name, args, user=user, request_id=request_id, thread_id=thread_id)
 
 
 def idempotency_key(user_id: str, request_id: str, tool_name: str, args: BaseModel) -> str:
@@ -116,7 +137,17 @@ def idempotency_key(user_id: str, request_id: str, tool_name: str, args: BaseMod
 
 
 class ToolExecutor:
-    def __init__(self, tools: Sequence[ToolSpec[Any, Any]]) -> None:
+    def __init__(
+        self,
+        tools: Sequence[ToolSpec[Any, Any]],
+        *,
+        gateway: ActionGateway | None = None,
+        agent: AgentIdentity | None = None,
+    ) -> None:
+        # `agent` is the identity of the agent this executor serves (host side).
+        # A shared executor (an MCP server) passes the caller's agent per call.
+        self._gateway = gateway
+        self._agent = agent
         self._tools: dict[str, ToolSpec[Any, Any]] = {}
         for tool in tools:
             if tool.name in self._tools:
@@ -133,8 +164,19 @@ class ToolExecutor:
     def model_definitions(self) -> list[dict[str, Any]]:
         return [tool.model_definition() for tool in self._tools.values()]
 
+    @property
+    def governed(self) -> bool:
+        return self._gateway is not None
+
     def execute(
-        self, name: str, args: dict[str, Any], *, user: UserContext, request_id: str
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None = None,
+        agent: AgentIdentity | None = None,
     ) -> ToolOutcome:
         started = time.perf_counter()
 
@@ -154,6 +196,46 @@ class ToolExecutor:
         except ValidationError as exc:
             return error("invalid_arguments", _describe_validation_error(exc))
 
+        if self._gateway is None:
+            return self._run(spec, parsed, user, request_id, error, elapsed)
+
+        authorization = self._gateway.authorize(
+            tool=name,
+            access=spec.access,
+            args=parsed.model_dump(mode="json"),
+            user=user,
+            agent=agent or self._agent,
+            request_id=request_id,
+            thread_id=thread_id,
+        )
+        match authorization.decision.decision:
+            case Decision.DENY:
+                reasons = ", ".join(authorization.decision.reasons)
+                outcome = error("policy_denied", f"This action is not allowed ({reasons}).")
+            case Decision.REQUIRE_APPROVAL:
+                outcome = error(
+                    "approval_required",
+                    "This action needs human approval before it can run. It was not performed.",
+                )
+            case _:
+                outcome = self._run(spec, parsed, user, request_id, error, elapsed)
+        self._gateway.record_outcome(
+            authorization,
+            outcome=outcome.error_category or "ok",
+            latency_ms=outcome.latency_ms,
+        )
+        return outcome
+
+    def _run(
+        self,
+        spec: ToolSpec[Any, Any],
+        parsed: BaseModel,
+        user: UserContext,
+        request_id: str,
+        error: Callable[[str, str], ToolOutcome],
+        elapsed: Callable[[], float],
+    ) -> ToolOutcome:
+        name = spec.name
         key = None
         if spec.access is ToolAccess.WRITE:
             key = idempotency_key(user.employee_id, request_id, name, parsed)

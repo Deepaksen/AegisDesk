@@ -235,7 +235,13 @@ class RemoteToolRunner:
         return bool(tool and tool.annotations and tool.annotations.read_only_hint)
 
     def execute(
-        self, name: str, args: dict[str, Any], *, user: UserContext, request_id: str
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None = None,
     ) -> ToolOutcome:
         started = time.perf_counter()
 
@@ -254,7 +260,11 @@ class RemoteToolRunner:
         for attempt in range(1, attempts + 1):
             # A fresh token per attempt: short-lived, and bound to this server.
             token = self._issuer.issue(
-                user=user, agent=self._agent, request_id=request_id, audience=self._server.audience
+                user=user,
+                agent=self._agent,
+                request_id=request_id,
+                audience=self._server.audience,
+                thread_id=thread_id,
             )
             try:
                 result = self._connection.call_tool(

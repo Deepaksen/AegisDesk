@@ -17,6 +17,7 @@ from pydantic import SecretStr
 from aegisdesk.agents.supervisor import build_supervisor_agent, specialist_identity
 from aegisdesk.config import Settings, ToolTransport
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.identity.context import UserContext
 from aegisdesk.mcp_servers.catalogue import McpServerName
 from aegisdesk.mcp_servers.http import build_http_app
@@ -37,10 +38,13 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def base_url(repository: ServiceDeskRepository) -> Iterator[str]:
+def base_url(repository: ServiceDeskRepository, gateway: ActionGateway) -> Iterator[str]:
     port = _free_port()
     config = uvicorn.Config(
-        build_http_app(repository, SECRET), host="127.0.0.1", port=port, log_level="warning"
+        build_http_app(repository, SECRET, gateway=gateway),
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)

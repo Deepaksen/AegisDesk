@@ -120,12 +120,15 @@ def build_tool_agent_graph(
             "stop_reason": None if reply.tool_calls else StopReason.FINAL_ANSWER.value,
         }
 
-    def run_tools(state: ServiceDeskState) -> dict[str, Any]:
+    def run_tools(state: ServiceDeskState, config: RunnableConfig) -> dict[str, Any]:
         reply = state["messages"][-1]
         if not isinstance(reply, AIMessage):  # the routing below guarantees this
             raise RuntimeError("run_tools reached without a model reply")
         user = context_from(state["user"])
         made = state["tool_calls"]
+        # Specialist subgraphs inherit the parent's config, so this is the
+        # conversation thread in both engines (recorded in audit events).
+        thread_id = (config.get("configurable") or {}).get("thread_id")
         new_messages: list[BaseMessage] = []
         trajectory = list(state["trajectory"])
         stop_reason: str | None = None
@@ -138,7 +141,11 @@ def build_tool_agent_graph(
                 continue
             made += 1
             outcome = executor.execute(
-                call["name"], call["args"], user=user, request_id=state["request_id"]
+                call["name"],
+                call["args"],
+                user=user,
+                request_id=state["request_id"],
+                thread_id=thread_id,
             )
             new_messages.append(
                 ToolMessage(

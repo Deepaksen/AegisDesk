@@ -22,6 +22,7 @@ from typing import Any
 from mcp.server import Server
 
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.identity.tokens import TokenVerifier
 from aegisdesk.mcp_servers.server import build_tool_server
 from aegisdesk.tools.access import build_access_tools
@@ -59,7 +60,7 @@ def enterprise_tools(repository: ServiceDeskRepository) -> dict[str, ToolSpec[An
 
 
 def build_servers(
-    repository: ServiceDeskRepository, secret: str
+    repository: ServiceDeskRepository, secret: str, *, gateway: ActionGateway
 ) -> dict[McpServerName, Server[Any]]:
     tools = enterprise_tools(repository)
     return {
@@ -67,6 +68,7 @@ def build_servers(
             f"aegisdesk-{server.value}",
             [tools[name] for name in sorted(names)],
             TokenVerifier(secret, audience=server.audience),
+            gateway,
         )
         for server, names in SERVER_TOOLS.items()
     }

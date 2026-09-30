@@ -21,13 +21,18 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.mcp_servers.catalogue import build_servers
 
 
 def build_http_app(
-    repository: ServiceDeskRepository, token_secret: str, *, host: str = "127.0.0.1"
+    repository: ServiceDeskRepository,
+    token_secret: str,
+    *,
+    gateway: ActionGateway,
+    host: str = "127.0.0.1",
 ) -> Starlette:
-    servers = build_servers(repository, token_secret)
+    servers = build_servers(repository, token_secret, gateway=gateway)
     # `host` enables the SDK's DNS-rebinding protection for localhost binds.
     mounts = [
         Mount(f"/{name.value}", app=server.streamable_http_app(host=host))

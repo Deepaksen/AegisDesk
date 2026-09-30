@@ -6,8 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from aegisdesk.audit.events import InMemoryAuditLog
 from aegisdesk.config import PROJECT_ROOT, Settings, get_settings
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.governance.factory import build_gateway
+from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.identity.context import UserContext, authenticate
 from aegisdesk.prompts.loader import Prompt, load_prompt
 from aegisdesk.rag.embeddings import HashingEmbedder
@@ -42,6 +45,8 @@ _MODEL_ENV_VARS = (
     "MCP_READ_URL",
     "MCP_ACTION_URL",
     "MCP_TIMEOUT_SECONDS",
+    "POLICY_PATH",
+    "AUDIT_STORE",
 )
 
 
@@ -97,3 +102,14 @@ def _knowledge_index() -> InMemoryVectorStore:
 def retriever(_knowledge_index: InMemoryVectorStore) -> Retriever:
     """Retriever over the real corpus with the offline hashing embedder (read-only, shared)."""
     return Retriever(HashingEmbedder(), _knowledge_index, top_k=4)
+
+
+@pytest.fixture
+def audit_log() -> InMemoryAuditLog:
+    return InMemoryAuditLog()
+
+
+@pytest.fixture
+def gateway(audit_log: InMemoryAuditLog) -> ActionGateway:
+    """The real policy (config/policy.yaml) in the default environment, auditing to memory."""
+    return build_gateway(Settings(), audit=audit_log)

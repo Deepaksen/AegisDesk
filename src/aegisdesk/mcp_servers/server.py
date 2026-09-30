@@ -8,8 +8,9 @@ the agents used locally in Milestones 1-4:
     tools/call  → 1. verify the delegation token from `_meta` (who, which agent,
                      which request; audience = this server)
                   2. ToolExecutor.execute(name, args, user=token user,
-                                          request_id=token request id)
-                     (schema validation, trusted context, idempotency, error shaping)
+                                          agent=token agent, request_id=token request id)
+                     (schema validation, then the action gateway: policy decision
+                     and audit events (Milestone 6), then idempotency, error shaping)
                   3. return the JSON result; errors as isError results
 
 The server never takes identity from the arguments or from the client's say-so:
@@ -27,6 +28,7 @@ from typing import Any
 import mcp_types as types
 from mcp.server import Server
 
+from aegisdesk.governance.gateway import ActionGateway
 from aegisdesk.identity.tokens import TOKEN_META_KEY, TokenError, TokenVerifier
 from aegisdesk.tools.base import ToolAccess, ToolSpec
 from aegisdesk.tools.executor import OutcomeStatus, ToolExecutor
@@ -64,9 +66,14 @@ def _error(category: str, message: str) -> types.CallToolResult:
 
 
 def build_tool_server(
-    name: str, tools: Sequence[ToolSpec[Any, Any]], verifier: TokenVerifier
+    name: str,
+    tools: Sequence[ToolSpec[Any, Any]],
+    verifier: TokenVerifier,
+    gateway: ActionGateway,
 ) -> Server[Any]:
-    executor = ToolExecutor(tools)
+    # The server is the authoritative enforcement point: whatever the host
+    # allowed, the policy is checked here against the token's agent and user.
+    executor = ToolExecutor(tools, gateway=gateway)
     descriptors = [tool_descriptor(t) for t in tools]
 
     async def list_tools(_ctx: Any, _params: Any) -> types.ListToolsResult:
@@ -88,6 +95,8 @@ def build_tool_server(
             dict(params.arguments or {}),
             user=caller.user,
             request_id=caller.request_id,
+            thread_id=caller.thread_id,
+            agent=caller.agent,
         )
         # Who did what, on whose behalf, independent of the conversation.
         logger.info(

@@ -45,6 +45,11 @@ class VectorStoreKind(StrEnum):
     PGVECTOR = "pgvector"
 
 
+class AuditStoreKind(StrEnum):
+    MEMORY = "memory"  # per process; tests and demos
+    POSTGRES = "postgres"  # append-only audit_events table (migration 0002)
+
+
 class ToolTransport(StrEnum):
     # Tools run in the agent's own process (Milestones 1-4).
     LOCAL = "local"
@@ -107,6 +112,10 @@ class Settings(BaseSettings):
     mcp_read_url: str = "http://127.0.0.1:8765/read/mcp"
     mcp_action_url: str = "http://127.0.0.1:8765/action/mcp"
     mcp_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+
+    # Governance (Milestone 6)
+    policy_path: Path = PROJECT_ROOT / "config" / "policy.yaml"
+    audit_store: AuditStoreKind = AuditStoreKind.MEMORY
 
 
 @lru_cache(maxsize=1)

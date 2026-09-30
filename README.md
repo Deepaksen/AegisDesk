@@ -14,6 +14,7 @@ All data is synthetic.
 | M3 RAG ✅ | 12-document knowledge base; chunking, embeddings (offline hashing or Ollama), in-memory and PostgreSQL + pgvector stores, access filtering before ranking, grounded answers with verified citations, knowledge tools for the agent, retrieval eval gate | [M3](docs/milestones/M3-rag.md) |
 | M4 Multi-agent ✅ | Supervisor with a structured router and deterministic dispatch; Knowledge, Service Desk and Access specialists as subgraphs with isolated tools and context; bounded handoffs; code-checked citations; access domain with deterministic eligibility (requests recorded, never granted) | [M4](docs/milestones/M4-multi-agent.md) |
 | M5 MCP ✅ | Enterprise tools behind a read and an action MCP server (in-process or Streamable HTTP); per-call signed delegation tokens carry user, agent, request ID and server audience; discovery with risk annotations; timeouts, read-only retries, no write retries; local vs remote comparison | [M5](docs/milestones/M5-mcp.md) |
+| M6 Governance ✅ | Action gateway on every tool call (host and MCP servers): deterministic policy from `config/policy.yaml` (agent grants, risk classes, authorized writes, forbidden actions, environments), fail-closed; append-only audit events in PostgreSQL (UPDATE/DELETE/TRUNCATE rejected); deliberate bypass attempts tested | [M6](docs/milestones/M6-governance.md) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
@@ -44,6 +45,10 @@ uv run aegisdesk mcp tools                                            # discover
 uv run aegisdesk agent --as E1004 --tools mcp_inprocess "What laptop is assigned to me?"
 MCP_TOKEN_SECRET=<32+ chars> uv run aegisdesk mcp serve               # HTTP: :8765/read/mcp, /action/mcp
 MCP_TOKEN_SECRET=<same> TOOL_TRANSPORT=mcp_http uv run aegisdesk agent --as E1004 "..."
+
+# Governance (M6)
+uv run aegisdesk policy check --as E1004 --agent knowledge --tool create_ticket   # DENY + reasons
+AUDIT_STORE=postgres uv run aegisdesk audit --user E1004                          # needs DATABASE_URL + migrations
 
 # Knowledge base (RAG)
 uv run aegisdesk rag search "my vpn keeps disconnecting" --as E1004   # inspect chunks and scores

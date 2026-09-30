@@ -78,6 +78,7 @@ Verification accepts only HS256 (never `none`), requires all of `exp iat sub aud
 | server down / connection lost | `unavailable` (session dropped, reconnect next call) | reads: once; writes: never |
 | JSON-RPC error | `protocol_error` | no |
 | bad / missing / wrong-audience token | `unauthenticated` | no |
+| policy refused on the server (M6) | `policy_denied` / `approval_required` | no |
 | tool refused (schema, ownership, eligibility) | the tool's own category | no |
 | unexpected error text from server | `remote_error` (text discarded) | no |
 
