@@ -66,7 +66,9 @@ def test_discovery_splits_tools_by_risk(mcp: McpGateway) -> None:
     assert set(read) == READ_TOOLS and set(action) == ACTION_TOOLS
     assert all(t.annotations and t.annotations.read_only_hint for t in read.values())
     assert not any(t.annotations and t.annotations.read_only_hint for t in action.values())
-    assert {(t.meta or {})["aegisdesk/risk"] for t in action.values()} == {"medium"}
+    risks = {name: (t.meta or {})["aegisdesk/risk"] for name, t in action.items()}
+    assert risks.pop("provision_access") == "high"  # the approval workflow's tool (M7)
+    assert set(risks.values()) == {"medium"}
     # No tool schema lets the caller name the user.
     for tool in [*read.values(), *action.values()]:
         assert "employee_id" not in tool.input_schema.get("properties", {})

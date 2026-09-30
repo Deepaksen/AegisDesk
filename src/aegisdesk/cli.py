@@ -19,6 +19,9 @@
     aegisdesk mcp tools                      MCP discovery: list each server's tools
     aegisdesk policy check --as E1004 --agent knowledge --tool create_ticket
     aegisdesk audit --user E1004             audit events (AUDIT_STORE=postgres to persist)
+    aegisdesk approvals list --as E1010      approvals waiting for a manager (Milestone 7)
+    aegisdesk approvals approve AP-0001 --as E1010 --comment "ok"   decide, then resume
+    aegisdesk db init                        migrate + checkpoint tables + seed (PostgreSQL)
 
 Every command prints the provider, model, prompt version, token usage and
 latency of each model call, because those are the facts later milestones will
@@ -51,19 +54,23 @@ from aegisdesk.agents.service_desk import (
     build_service_desk_graph_agent,
 )
 from aegisdesk.agents.supervisor import build_supervisor_agent
+from aegisdesk.approvals.service import ApprovalError, ApprovalService
 from aegisdesk.config import (
     PROJECT_ROOT,
+    DataStoreKind,
     Settings,
     ToolTransport,
     VectorStoreKind,
     get_settings,
 )
+from aegisdesk.domain.access import ApprovalRecord
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
 from aegisdesk.governance.factory import build_audit_log, build_gateway
 from aegisdesk.governance.policy import PolicyEngine, PolicyError, PolicyInput
 from aegisdesk.graphs.service_desk_graph import (
     NODE_START,
+    NotPausedError,
     ThreadAccessError,
     ThreadedGraphAgent,
     step_from_entry,
@@ -76,7 +83,7 @@ from aegisdesk.llm.factory import ModelConfigurationError, build_chat_model
 from aegisdesk.llm.usage import TokenUsage
 from aegisdesk.mcp_servers.catalogue import McpServerName, build_servers
 from aegisdesk.mcp_servers.server import RISK_META_KEY
-from aegisdesk.persistence.checkpointer import sqlite_checkpointer
+from aegisdesk.persistence.factory import build_repository, open_checkpointer, psycopg_url
 from aegisdesk.prompts.loader import PromptNotFoundError, load_prompt
 from aegisdesk.rag.answer import GroundedAnswerer
 from aegisdesk.rag.factory import build_embedder, build_retriever, build_store
@@ -195,6 +202,11 @@ def _print_run(run: AgentRun, settings: Settings, *, quiet: bool, show_steps: bo
         for step in run.trajectory:
             print(_format_step(step))
     print(f"Assistant: {run.answer}")
+    if run.pending_approvals:
+        steps = ", ".join(
+            f"{p['approval_id']} ({p['step']}: {p['approver']})" for p in run.pending_approvals
+        )
+        print(f"⏸ Waiting for approval: {steps}. Thread {run.thread_id} will resume on decision.")
     if not quiet:
         thread = f" thread_id={run.thread_id}" if run.thread_id else ""
         print(
@@ -238,7 +250,7 @@ def _read_turns(prompt: str) -> Iterator[str]:
 
 
 def _login(settings: Settings, employee_id: str) -> tuple[ServiceDeskRepository, UserContext]:
-    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    repository = build_repository(settings)
     # Simulated login. The identity is fixed here, before the model is involved.
     return repository, authenticate(repository, employee_id)
 
@@ -277,7 +289,7 @@ def _run_graph_engine(
         print("Note: MCP tool transport applies to --engine multi; using local tools.")
         settings = settings.model_copy(update={"tool_transport": ToolTransport.LOCAL})
     with (
-        sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer,
+        open_checkpointer(settings) as checkpointer,
         ToolFactory.from_settings(settings, repository) as tool_factory,
     ):
         agent: ThreadedGraphAgent
@@ -326,7 +338,7 @@ def cmd_agent(settings: Settings, args: argparse.Namespace) -> int:
 def cmd_thread(settings: Settings, args: argparse.Namespace) -> int:
     try:
         repository, user = _login(settings, args.employee_id)
-        with sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer:
+        with open_checkpointer(settings) as checkpointer:
             agent = build_service_desk_graph_agent(settings, repository, checkpointer=checkpointer)
             messages = agent.history(args.thread_id, user)
     except AuthenticationError as exc:
@@ -556,6 +568,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--user", help="only this employee ID")
     p.add_argument("--limit", type=int, default=50)
 
+    ap = sub.add_parser("approvals", help="approve or reject access requests (Milestone 7)")
+    ap_sub = ap.add_subparsers(dest="approvals_command", required=True)
+    p = ap_sub.add_parser("list", help="approvals waiting for you")
+    p.add_argument("--as", dest="employee_id", required=True, help="approver's employee ID")
+    p = ap_sub.add_parser("show", help="one approval")
+    p.add_argument("approval_id")
+    p.add_argument("--as", dest="employee_id", required=True)
+    for verb in ("approve", "reject"):
+        p = ap_sub.add_parser(verb, help=f"{verb} an approval step, then resume the workflow")
+        p.add_argument("approval_id")
+        p.add_argument("--as", dest="employee_id", required=True, help="approver's employee ID")
+        p.add_argument("--comment", default=None)
+
+    db = sub.add_parser("db", help="database setup (PostgreSQL)")
+    db_sub = db.add_subparsers(dest="db_command", required=True)
+    db_sub.add_parser("init", help="migrate, create checkpoint tables, load seed rows")
+    db_sub.add_parser("seed", help="load seed rows that are missing")
+
     p = sub.add_parser("thread", help="show a stored conversation thread")
     p.add_argument("thread_id")
     p.add_argument("--as", dest="employee_id", required=True, help="employee ID to sign in as")
@@ -649,12 +679,119 @@ def cmd_audit(settings: Settings, args: argparse.Namespace) -> int:
         agent = f"{e.agent_id}@{e.agent_version}" if e.agent_id else "-"
         reasons = f" reasons={','.join(e.policy_reasons)}" if e.policy_reasons else ""
         resource = f" resource={json.dumps(e.resource)}" if e.resource else ""
+        if e.approval_id:
+            resource += f" approval={e.approval_id} approver={e.approver_id}"
         print(
             f"{e.occurred_at:%Y-%m-%d %H:%M:%S} {e.phase.value:<8} {e.tool:<24} "
             f"user={e.user_id} agent={agent} env={e.environment} "
             f"decision={e.policy_decision} outcome={e.outcome}{reasons}{resource} "
             f"request_id={e.request_id}" + (f" thread_id={e.thread_id}" if e.thread_id else "")
         )
+    return 0
+
+
+def _approval_service(settings: Settings, repository: ServiceDeskRepository) -> ApprovalService:
+    return ApprovalService(
+        repository.access_store, build_audit_log(settings), environment=settings.aegis_env.value
+    )
+
+
+def cmd_approvals(settings: Settings, args: argparse.Namespace) -> int:
+    """The manager's side of the approval workflow (a UI arrives in Milestone 10)."""
+    repository, approver = _login(settings, args.employee_id)
+    service = _approval_service(settings, repository)
+    memory_note = (
+        "  (DATA_STORE=memory: approvals exist only inside one process; "
+        "use DATA_STORE=postgres to decide from another process.)"
+    )
+    try:
+        if args.approvals_command == "list":
+            pending = service.list_pending_for(approver)
+            if not pending:
+                print(f"No approvals waiting for {approver.employee_id}.")
+                if settings.data_store is DataStoreKind.MEMORY:
+                    print(memory_note)
+            for a in pending:
+                print(_format_approval(a, repository))
+            return 0
+        if args.approvals_command == "show":
+            print(_format_approval(service.get(args.approval_id, approver), repository))
+            return 0
+
+        result = service.decide(
+            args.approval_id,
+            approver,
+            approve=args.approvals_command == "approve",
+            comment=args.comment,
+        )
+    except ApprovalError as exc:
+        print(f"Refused ({exc.category}): {exc}", file=sys.stderr)
+        return 2
+    print(_format_approval(result.approval, repository))
+    if not result.changed:
+        print("  (already recorded; nothing changed)")
+    if result.request.status.is_open:
+        print(f"  {result.request.request_id} still waits for other approvals.")
+        return 0
+    return _resume_thread(settings, repository, result.request.thread_id)
+
+
+def _resume_thread(
+    settings: Settings, repository: ServiceDeskRepository, thread_id: str | None
+) -> int:
+    if thread_id is None:
+        print("  No conversation to resume (the request was not made through the assistant).")
+        return 0
+    with (
+        open_checkpointer(settings) as checkpointer,
+        ToolFactory.from_settings(settings, repository) as tool_factory,
+    ):
+        agent = build_supervisor_agent(
+            settings, repository, checkpointer=checkpointer, tool_factory=tool_factory
+        )
+        try:
+            run = agent.resume(thread_id)
+        except NotPausedError:
+            print(f"  Thread {thread_id} is not paused (already resumed).")
+            return 0
+    print(f"Resumed thread {thread_id}:")
+    print(f"Assistant: {run.answer}")
+    return 0
+
+
+def _format_approval(a: ApprovalRecord, repository: ServiceDeskRepository) -> str:
+    requester = repository.get_employee(a.requester_id)
+    app = repository.get_application(a.application_id)
+    who = a.approver_id or f"any {a.approver_role}"
+    decided = (f" by {a.decided_by} at {a.decided_at:%Y-%m-%d %H:%M}" if a.decided_at else "") + (
+        f' "{a.comment}"' if a.comment else ""
+    )
+    return (
+        f"{a.approval_id}  {a.status.value:<8} {a.step.value:<10} {a.access_request_id} "
+        f"{app.name if app else a.application_id} for {requester.name if requester else ''} "
+        f"({a.requester_id})  approver={who}  expires={a.expires_at:%Y-%m-%d %H:%M}{decided}"
+    )
+
+
+def cmd_db(settings: Settings, args: argparse.Namespace) -> int:
+    """Create schemas (Alembic + LangGraph checkpointer) and load seed rows. Never at startup."""
+    from aegisdesk.domain.access_store_pg import PgAccessStore
+
+    if args.db_command == "init":
+        from alembic import command
+        from alembic.config import Config
+
+        command.upgrade(Config(str(PROJECT_ROOT / "alembic.ini")), "head")
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        with PostgresSaver.from_conn_string(psycopg_url(settings.database_url)) as saver:
+            saver.setup()
+        print("Schema up to date (Alembic head + LangGraph checkpoint tables).")
+    seed = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    requests = [r for e in seed.list_employee_ids() for r in seed.access_requests_for(e)]
+    access = [a for e in seed.list_employee_ids() for a in seed.access_for(e)]
+    inserted = PgAccessStore(settings.database_url).seed(access, requests)
+    print(f"Seed rows inserted: {inserted} (existing rows are never overwritten).")
     return 0
 
 
@@ -671,6 +808,8 @@ COMMANDS = {
     "mcp": cmd_mcp,
     "policy": cmd_policy,
     "audit": cmd_audit,
+    "approvals": cmd_approvals,
+    "db": cmd_db,
 }
 
 

@@ -9,7 +9,8 @@ by OPA later without touching its callers:
 
 Every deny rule is evaluated and every reason is reported (like a Rego
 `deny` set), so an audit record says *all* the ways a call was wrong. Any
-deny wins; otherwise HIGH risk needs a human; otherwise the call is allowed.
+deny wins; otherwise HIGH risk needs a human (unless the gateway found
+recorded human approval for this exact call); otherwise the call is allowed.
 Anything unexpected inside evaluation is a deny: the engine fails closed.
 """
 
@@ -51,12 +52,23 @@ class DenyReason(StrEnum):
 
 
 @dataclass(frozen=True)
+class ApprovalEvidence:
+    """Recorded human approval for a call, looked up by the gateway (never from the caller)."""
+
+    approval_ids: tuple[str, ...]
+    approver_ids: tuple[str, ...]
+    # True for standard applications that need no human step (application policy).
+    automatic: bool = False
+
+
+@dataclass(frozen=True)
 class PolicyInput:
     tool: str
     user: UserContext
     agent: AgentIdentity | None
     # Where the enforcing component runs (not what the caller claims).
     environment: str
+    approval: ApprovalEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -178,7 +190,7 @@ class PolicyEngine:
             return PolicyDecision(
                 Decision.DENY, tuple(r.value for r in reasons), self.version, risk
             )
-        if risk is ToolRisk.HIGH:
+        if risk is ToolRisk.HIGH and request.approval is None:
             return PolicyDecision(
                 Decision.REQUIRE_APPROVAL, ("high_risk_requires_approval",), self.version, risk
             )

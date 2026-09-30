@@ -57,7 +57,7 @@ PolicyDecision {decision: allow | deny | require_approval,
 |---|---|---|
 | LOW | all reads, knowledge, handoff | allowed if granted |
 | MEDIUM | create_ticket, add_ticket_comment, create_access_request | allowed only if in `authorized_writes` (all three are) |
-| HIGH | none yet (M7 adds approval-gated actions) | require approval |
+| HIGH | provision_access (granted only to `access_workflow`) | require approval, unless the gateway finds recorded approval evidence in the store (M7) |
 | forbidden | direct_grant_production_admin, grant_access, delete_audit_events | always denied |
 
 | Environment | Allowed |

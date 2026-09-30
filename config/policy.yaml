@@ -6,7 +6,8 @@
 # locally and on the MCP servers. Nothing a model says can change it.
 #
 # Decision order: collect every deny reason; any deny wins. Otherwise HIGH
-# risk requires human approval (Milestone 7), and everything else is allowed.
+# risk requires human approval unless the gateway found recorded approval
+# for this exact call (Milestone 7), and everything else is allowed.
 # A tool missing from `tools` is denied (unclassified).
 
 version: 1
@@ -31,6 +32,9 @@ tools:
   create_ticket: {risk: medium}
   add_ticket_comment: {risk: medium}
   create_access_request: {risk: medium}
+  # Grants access. HIGH: allowed only with recorded human approval (or an
+  # auto-approved standard application), which the gateway looks up itself.
+  provision_access: {risk: high}
 
 # MEDIUM: automatic only for explicitly authorized operations.
 authorized_writes:
@@ -65,6 +69,10 @@ agents:
     - check_access_eligibility
     - create_access_request
     - request_handoff
+  # The approval workflow (deterministic code, not a model). The only identity
+  # that may provision, and only after approval.
+  access_workflow:
+    - provision_access
   # The single Service Desk agent (--engine graph / loop), kept for comparison.
   service_desk_single:
     - get_my_assets

@@ -23,6 +23,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from aegisdesk.agents.knowledge import check_knowledge_answer
 from aegisdesk.agents.loop import AgentLimits
+from aegisdesk.approvals.service import ApprovalService
+from aegisdesk.approvals.workflow import AccessApprovalWorkflow, workflow_identity
 from aegisdesk.config import Settings
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.governance.factory import build_gateway
@@ -42,6 +44,7 @@ from aegisdesk.tools.access import build_access_tools
 from aegisdesk.tools.base import ToolSpec
 from aegisdesk.tools.handoff import AgentName, build_handoff_tool
 from aegisdesk.tools.knowledge import build_knowledge_tools
+from aegisdesk.tools.provisioning import build_provisioning_tools
 from aegisdesk.tools.service_desk import build_service_desk_tools
 from aegisdesk.tools.transport import ToolFactory
 
@@ -100,7 +103,9 @@ def build_supervisor_agent(
         max_steps=settings.agent_max_steps, max_tool_calls=settings.agent_max_tool_calls
     )
     tools = specialist_tools(repository, retriever)
-    tool_factory = tool_factory or ToolFactory(gateway=build_gateway(settings))
+    tool_factory = tool_factory or ToolFactory(
+        gateway=build_gateway(settings, access_store=repository.access_store)
+    )
 
     specialists = {}
     for agent, (prompt_name, version) in PROMPTS.items():
@@ -117,6 +122,17 @@ def build_supervisor_agent(
             check_answer=check_knowledge_answer if agent is AgentName.KNOWLEDGE else None,
         )
 
+    # The approval workflow (M7): deterministic code with its own identity, which
+    # the policy allows to provision only with recorded approval.
+    gateway = tool_factory.gateway
+    workflow = AccessApprovalWorkflow(
+        repository,
+        ApprovalService(repository.access_store, gateway.audit, environment=gateway.environment),
+        tool_factory.runner(
+            workflow_identity(settings.aegis_env.value), build_provisioning_tools(repository)
+        ),
+    )
+
     limits = SupervisorLimits(max_handoffs=settings.agent_max_handoffs)
     router_prompt = load_prompt(settings.prompts_dir, "router", "v1")
     return ThreadedGraphAgent(
@@ -129,6 +145,7 @@ def build_supervisor_agent(
             specialists=specialists,
             limits=limits,
             checkpointer=checkpointer,
+            approvals=workflow,
         ),
         recursion_limit=supervisor_recursion_limit(limits),
     )

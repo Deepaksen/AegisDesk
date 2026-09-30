@@ -1,25 +1,26 @@
-"""In-memory service-desk data store, seeded from `data/seed/*.json`.
+"""Service-desk data, seeded from `data/seed/*.json`.
 
-Milestone 1 keeps data in memory on purpose: the lesson is tool calling, not
-persistence. Writes live only for the lifetime of the process. PostgreSQL,
-migrations and the full synthetic dataset replace this later, behind the same
-methods.
+Employees, assets, tickets and applications are in memory (Milestone 1 keeps
+the lesson on tool calling, not persistence). The access domain (access
+records, requests, approvals) lives in an `AccessStore` from Milestone 7,
+in memory or in PostgreSQL, because an approval must survive a restart.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from aegisdesk.domain.access import (
     AccessRecord,
     AccessRequest,
-    AccessRequestStatus,
     Application,
     Approval,
+    approval_steps,
 )
+from aegisdesk.domain.access_store import AccessStore, InMemoryAccessStore
 from aegisdesk.domain.models import (
     Asset,
     Employee,
@@ -41,24 +42,34 @@ class ServiceDeskRepository:
         access: list[AccessRecord] | None = None,
         access_requests: list[AccessRequest] | None = None,
         today: Callable[[], date] = date.today,
+        access_store: AccessStore | None = None,
+        approval_ttl: timedelta = timedelta(days=7),
     ):
         self._employees = {e.employee_id: e for e in employees}
         self._assets = {a.asset_tag: a for a in assets}
         self._tickets = {t.ticket_id: t for t in tickets}
         self._applications = {a.application_id: a for a in applications or []}
-        self._access = list(access or [])
-        self._requests = {r.request_id: r for r in access_requests or []}
+        self.access_store: AccessStore = access_store or InMemoryAccessStore(
+            access, access_requests
+        )
+        self._approval_ttl = approval_ttl
         self._today = today
         # idempotency key -> record id, so a repeated write returns the first result.
         self._ticket_idempotency: dict[str, str] = {}
-        self._request_idempotency: dict[str, str] = {}
         self._comments: dict[str, TicketComment] = {}
         self._comment_idempotency: dict[str, str] = {}
 
     @classmethod
     def from_seed(
-        cls, seed_dir: Path, *, today: Callable[[], date] = date.today
+        cls,
+        seed_dir: Path,
+        *,
+        today: Callable[[], date] = date.today,
+        access_store: AccessStore | None = None,
+        approval_ttl: timedelta = timedelta(days=7),
     ) -> ServiceDeskRepository:
+        """Seed everything; with `access_store`, the access domain comes from that store."""
+
         def load(name: str) -> list[dict[str, object]]:
             data: list[dict[str, object]] = json.loads(
                 (seed_dir / f"{name}.json").read_text(encoding="utf-8")
@@ -73,9 +84,14 @@ class ServiceDeskRepository:
             access=[AccessRecord.model_validate(r) for r in load("employee_access")],
             access_requests=[AccessRequest.model_validate(r) for r in load("access_requests")],
             today=today,
+            access_store=access_store,
+            approval_ttl=approval_ttl,
         )
 
     # -- reads ------------------------------------------------------------
+
+    def list_employee_ids(self) -> list[str]:
+        return sorted(self._employees)
 
     def get_employee(self, employee_id: str) -> Employee | None:
         return self._employees.get(employee_id)
@@ -171,17 +187,13 @@ class ServiceDeskRepository:
         return mentioned[0] if len(mentioned) == 1 else None
 
     def access_for(self, employee_id: str) -> list[AccessRecord]:
-        return [a for a in self._access if a.employee_id == employee_id]
+        return self.access_store.access_for(employee_id)
 
     def access_requests_for(self, employee_id: str) -> list[AccessRequest]:
-        return sorted(
-            (r for r in self._requests.values() if r.employee_id == employee_id),
-            key=lambda r: r.request_id,
-        )
+        return self.access_store.access_requests_for(employee_id)
 
     def access_request_for_key(self, idempotency_key: str) -> AccessRequest | None:
-        request_id = self._request_idempotency.get(idempotency_key)
-        return self._requests[request_id] if request_id else None
+        return self.access_store.access_request_for_key(idempotency_key)
 
     def create_access_request(
         self,
@@ -191,26 +203,20 @@ class ServiceDeskRepository:
         approvals_required: list[Approval],
         justification: str,
         idempotency_key: str,
+        thread_id: str | None = None,
     ) -> tuple[AccessRequest, bool]:
-        """Record a request (never grants access). Returns (request, created)."""
-        existing_id = self._request_idempotency.get(idempotency_key)
-        if existing_id is not None:
-            return self._requests[existing_id], False
-
-        highest = max((int(r.split("-")[1]) for r in self._requests), default=1000)
-        request = AccessRequest(
-            request_id=f"AR-{highest + 1}",
+        """Record a request and its approval steps (never grants access)."""
+        employee = self._employees[employee_id]
+        return self.access_store.create_access_request(
             employee_id=employee_id,
             application_id=application_id,
-            status=(
-                AccessRequestStatus.AWAITING_APPROVAL
-                if approvals_required
-                else AccessRequestStatus.AUTO_APPROVED
-            ),
             approvals_required=approvals_required,
-            created_at=datetime.now(UTC),
+            steps=approval_steps(employee, approvals_required),
             justification=justification,
+            idempotency_key=idempotency_key,
+            thread_id=thread_id,
+            approval_ttl=self._approval_ttl,
         )
-        self._requests[request.request_id] = request
-        self._request_idempotency[idempotency_key] = request.request_id
-        return request, True
+
+    def get_application(self, application_id: str) -> Application | None:
+        return self._applications.get(application_id)

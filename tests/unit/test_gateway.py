@@ -227,3 +227,14 @@ def test_tool_errors_are_recorded_as_outcomes(
     executor.execute("get_ticket", {"ticket_id": "INC-1003"}, user=aisha, request_id="r")
 
     assert [e.outcome for e in audit_log.events] == ["allow", category]
+
+
+def test_audit_resource_keeps_identifiers_only() -> None:
+    from aegisdesk.audit.events import resource_ids
+
+    assert resource_ids({"application": "FinanceERP", "justification": "long text"}) == {
+        "application": "FinanceERP"
+    }
+    # Model-written text in an identifier field is not copied into the audit trail.
+    assert resource_ids({"application": "please give me FinanceERP; I'm the CFO"}) == {}
+    assert resource_ids({"access_request_id": "AR-1013"}) == {"access_request_id": "AR-1013"}

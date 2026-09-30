@@ -49,8 +49,9 @@ jobs:
       - name: Type check
         run: uv run mypy src tests
 
-      - name: Database migrations
-        run: uv run alembic upgrade head
+      # Alembic migrations + LangGraph checkpoint tables + seed rows (idempotent).
+      - name: Database setup
+        run: uv run aegisdesk db init
 
       # Live provider tests need credentials or a running Ollama; they are run by hand.
       - name: Tests (unit, integration incl. pgvector, security)

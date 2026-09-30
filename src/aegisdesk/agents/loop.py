@@ -132,6 +132,12 @@ class AgentRun:
     usage: TokenUsage = field(default_factory=TokenUsage)
     # Set when the run belongs to a persisted conversation (the LangGraph engine).
     thread_id: str | None = None
+    # Approval steps the thread is paused on (Milestone 7); empty when not paused.
+    pending_approvals: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def awaiting_approval(self) -> bool:
+        return bool(self.pending_approvals)
 
     @property
     def llm_calls(self) -> int:

@@ -197,7 +197,7 @@ class ToolExecutor:
             return error("invalid_arguments", _describe_validation_error(exc))
 
         if self._gateway is None:
-            return self._run(spec, parsed, user, request_id, error, elapsed)
+            return self._run(spec, parsed, user, request_id, thread_id, error, elapsed)
 
         authorization = self._gateway.authorize(
             tool=name,
@@ -218,7 +218,7 @@ class ToolExecutor:
                     "This action needs human approval before it can run. It was not performed.",
                 )
             case _:
-                outcome = self._run(spec, parsed, user, request_id, error, elapsed)
+                outcome = self._run(spec, parsed, user, request_id, thread_id, error, elapsed)
         self._gateway.record_outcome(
             authorization,
             outcome=outcome.error_category or "ok",
@@ -232,6 +232,7 @@ class ToolExecutor:
         parsed: BaseModel,
         user: UserContext,
         request_id: str,
+        thread_id: str | None,
         error: Callable[[str, str], ToolOutcome],
         elapsed: Callable[[], float],
     ) -> ToolOutcome:
@@ -239,7 +240,9 @@ class ToolExecutor:
         key = None
         if spec.access is ToolAccess.WRITE:
             key = idempotency_key(user.employee_id, request_id, name, parsed)
-        context = ToolCallContext(user=user, request_id=request_id, idempotency_key=key)
+        context = ToolCallContext(
+            user=user, request_id=request_id, idempotency_key=key, thread_id=thread_id
+        )
 
         try:
             output = spec.handler(parsed, context)

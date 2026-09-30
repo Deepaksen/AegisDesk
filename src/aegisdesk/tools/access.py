@@ -7,8 +7,9 @@ user from `ToolCallContext`.
 `create_access_request` does not trust the agent's eligibility check. It
 recomputes eligibility itself and refuses ineligible requests. It never
 grants access: it records a request that is either auto-approved (standard
-applications) or awaiting approval (collected by the approval workflow in
-Milestone 7).
+applications) or awaiting approval, together with its approval steps. Granting
+is done later by the approval workflow (`aegisdesk.approvals`) through the
+HIGH-risk `provision_access` tool, which no conversational agent holds.
 """
 
 from __future__ import annotations
@@ -232,10 +233,16 @@ def build_access_tools(repository: ServiceDeskRepository) -> list[ToolSpec[Any, 
             approvals_required=approvals,
             justification=args.justification.strip(),
             idempotency_key=ctx.idempotency_key,
+            thread_id=ctx.thread_id,
         )
+        steps = repository.access_store.approvals_for_request(request.request_id)
         next_step = (
-            "Waiting for approval from: "
-            + ", ".join(a.value.replace("_", " ") for a in request.approvals_required)
+            "Waiting for approval: "
+            + "; ".join(
+                f"{a.approval_id} ({a.step.value.replace('_', ' ')}: "
+                f"{a.approver_id or 'any ' + (a.approver_role or '').replace('_', ' ')})"
+                for a in steps
+            )
             + ". Nothing is granted until every approval is recorded."
             if request.status is AccessRequestStatus.AWAITING_APPROVAL
             else "Standard application: access will be provisioned automatically."

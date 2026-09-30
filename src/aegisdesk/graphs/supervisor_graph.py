@@ -4,7 +4,18 @@
                            (LLM: RoutingPlan)    ▲  │    ├─► service_desk ──┤  specialist
                                                  │  │    ├─► access ────────┤  subgraphs
                                                  └──┼────┴──────────────────┘
-                                                    └─► respond → END
+                                                    └─► respond ─┬─────────────────────► END
+                                                                 │ access request made
+                                                                 ▼
+                                    await_approval ⇄ INTERRUPT (state saved; process may exit)
+                                                                 │ every step decided
+                                                                 ▼
+                                                    apply_approvals (provision / report) → END
+
+Approval (Milestone 7) is code, not model: `await_approval` asks the approval
+store whether humans have decided, and pauses the thread with `interrupt()`
+until they have. A manager's decision resumes it; `apply_approvals` then
+provisions through the governed `provision_access` tool.
 
 Who decides what:
 
@@ -33,18 +44,20 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 from pydantic import ValidationError
 
 from aegisdesk.agents.loop import StopReason
-from aegisdesk.graphs.state import ServiceDeskState
+from aegisdesk.graphs.state import ServiceDeskState, context_from
+from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.usage import TokenUsage
 from aegisdesk.prompts.loader import Prompt
 from aegisdesk.schemas.routing import RoutingPlan
@@ -56,6 +69,8 @@ NODE_START = "start_turn"
 NODE_CLASSIFY = "classify_request"
 NODE_SUPERVISOR = "supervisor"
 NODE_RESPOND = "respond"
+NODE_AWAIT_APPROVAL = "await_approval"
+NODE_APPLY_APPROVALS = "apply_approvals"
 SPECIALIST_NODES = {agent: agent.value for agent in AgentName}
 
 # Visible turns (human/assistant messages) passed to the router and to specialists.
@@ -86,6 +101,35 @@ class SupervisorState(ServiceDeskState, total=False):
     handoffs: int
     out_of_scope: bool
     routing_error: str | None
+    # Access requests of this turn that the approval workflow is following.
+    approval_requests: list[str]
+
+
+class Settled(Protocol):
+    @property
+    def messages(self) -> list[str]: ...
+
+    @property
+    def trajectory(self) -> list[dict[str, Any]]: ...
+
+
+class ApprovalWorkflow(Protocol):
+    """What the graph needs from the approval workflow (`aegisdesk.approvals.workflow`)."""
+
+    def requests_in(self, trajectory: list[dict[str, Any]]) -> list[str]: ...
+
+    def waiting(self, request_ids: list[str]) -> bool: ...
+
+    def pending(self, request_ids: list[str]) -> list[dict[str, Any]]: ...
+
+    def settle(
+        self,
+        request_ids: list[str],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None,
+    ) -> Settled: ...
 
 
 # (answer, specialist trajectory entries) -> (answer to use, note or None)
@@ -126,6 +170,7 @@ def build_supervisor_graph(
     specialists: dict[AgentName, Specialist],
     limits: SupervisorLimits,
     checkpointer: BaseCheckpointSaver[Any] | None,
+    approvals: ApprovalWorkflow | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     router = router_model.with_structured_output(RoutingPlan, include_raw=True)
 
@@ -144,6 +189,7 @@ def build_supervisor_graph(
             "handoffs": 0,
             "out_of_scope": False,
             "routing_error": None,
+            "approval_requests": [],
         }
 
     def classify_request(state: SupervisorState) -> dict[str, Any]:
@@ -312,9 +358,46 @@ def build_supervisor_graph(
             answer = "\n\n".join(
                 f"**{SECTION_TITLES[AgentName(t['agent'])]}**\n{t['answer']}" for t in finished
             )
+        requests = approvals.requests_in(state["trajectory"]) if approvals else []
         return {
             "messages": [AIMessage(content=answer)],
             "stop_reason": StopReason.FINAL_ANSWER.value,
+            "approval_requests": requests,
+        }
+
+    def after_respond(state: SupervisorState) -> str:
+        if approvals is None or not state.get("approval_requests"):
+            return END
+        return NODE_AWAIT_APPROVAL
+
+    def await_approval(state: SupervisorState) -> dict[str, Any]:
+        workflow = _require(approvals)
+        requests = state["approval_requests"]
+        if workflow.waiting(requests):
+            # Pause the thread. The checkpointer has saved the state; the process may exit.
+            # The resume value is ignored: only the approval store says what was decided.
+            interrupt({"access_requests": requests, "pending": workflow.pending(requests)})
+        return {}
+
+    def after_await(state: SupervisorState) -> str:
+        workflow = _require(approvals)
+        # Resumed after one of several steps? Pause again until all are decided.
+        if workflow.waiting(state["approval_requests"]):
+            return NODE_AWAIT_APPROVAL
+        return NODE_APPLY_APPROVALS
+
+    def apply_approvals(state: SupervisorState, config: RunnableConfig) -> dict[str, Any]:
+        workflow = _require(approvals)
+        settled = workflow.settle(
+            state["approval_requests"],
+            user=context_from(state["user"]),
+            request_id=state["request_id"],
+            thread_id=(config.get("configurable") or {}).get("thread_id"),
+        )
+        return {
+            "messages": [AIMessage(content=m) for m in settled.messages],
+            "trajectory": [*state["trajectory"], *settled.trajectory],
+            "approval_requests": [],
         }
 
     graph = StateGraph(SupervisorState)
@@ -334,10 +417,26 @@ def build_supervisor_graph(
     graph.add_edge(START, NODE_START)
     graph.add_edge(NODE_START, NODE_CLASSIFY)
     graph.add_edge(NODE_CLASSIFY, NODE_SUPERVISOR)
-    graph.add_edge(NODE_RESPOND, END)
+    if approvals is None:
+        graph.add_edge(NODE_RESPOND, END)
+    else:
+        graph.add_node(NODE_AWAIT_APPROVAL, await_approval)
+        graph.add_node(NODE_APPLY_APPROVALS, apply_approvals)
+        graph.add_conditional_edges(NODE_RESPOND, after_respond, [NODE_AWAIT_APPROVAL, END])
+        graph.add_conditional_edges(
+            NODE_AWAIT_APPROVAL, after_await, [NODE_AWAIT_APPROVAL, NODE_APPLY_APPROVALS]
+        )
+        graph.add_edge(NODE_APPLY_APPROVALS, END)
     return graph.compile(checkpointer=checkpointer)
 
 
+def _require(approvals: ApprovalWorkflow | None) -> ApprovalWorkflow:
+    if approvals is None:  # the approval nodes are only added with a workflow
+        raise RuntimeError("approval node reached without an approval workflow")
+    return approvals
+
+
 def supervisor_recursion_limit(limits: SupervisorLimits) -> int:
-    # start + classify + (supervisor + specialist) per run + final supervisor + respond
-    return 2 * limits.max_specialist_runs + 6
+    # start + classify + (supervisor + specialist) per run + final supervisor + respond,
+    # + await_approval (twice after a resume) + apply_approvals
+    return 2 * limits.max_specialist_runs + 9

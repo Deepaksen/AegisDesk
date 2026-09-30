@@ -69,7 +69,7 @@ class ToolFactory:
         *,
         gateway: ActionGateway | None = None,
     ) -> ToolFactory:
-        gateway = gateway or build_gateway(settings)
+        gateway = gateway or build_gateway(settings, access_store=repository.access_store)
         transport = settings.tool_transport
         secret = settings.mcp_token_secret.get_secret_value() if settings.mcp_token_secret else None
         if transport is ToolTransport.LOCAL:

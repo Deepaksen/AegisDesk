@@ -191,3 +191,21 @@ def test_broken_policy_file_is_a_configuration_error(
 def test_audit_with_memory_store_explains_itself(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["audit", "--user", "E1004"]) == 0
     assert "memory store is per process" in capsys.readouterr().out
+
+
+def test_approvals_list_explains_the_memory_store(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["approvals", "list", "--as", "E1010"]) == 0
+    out = capsys.readouterr().out
+    assert "No approvals waiting for E1010" in out and "DATA_STORE=postgres" in out
+
+
+def test_approving_an_unknown_approval_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["approvals", "approve", "AP-9999", "--as", "E1010"]) == 2
+    assert "Refused (not_found)" in capsys.readouterr().err
+
+
+def test_agent_shows_the_pause(capsys: pytest.CaptureFixture[str]) -> None:
+    message = "Please create an access request for FinanceERP for month-end reporting"
+    assert main(["agent", "--as", "E1004", "--quiet", message]) == 0
+    out = capsys.readouterr().out
+    assert "⏸ Waiting for approval: AP-0001 (manager: E1010)" in out

@@ -50,6 +50,16 @@ class AuditStoreKind(StrEnum):
     POSTGRES = "postgres"  # append-only audit_events table (migration 0002)
 
 
+class DataStoreKind(StrEnum):
+    MEMORY = "memory"  # seeded per process; approvals do not survive a restart
+    POSTGRES = "postgres"  # access requests, approvals, granted access (migration 0003)
+
+
+class CheckpointStoreKind(StrEnum):
+    SQLITE = "sqlite"  # a local file (CHECKPOINT_DB_PATH)
+    POSTGRES = "postgres"  # LangGraph's Postgres checkpointer on DATABASE_URL
+
+
 class ToolTransport(StrEnum):
     # Tools run in the agent's own process (Milestones 1-4).
     LOCAL = "local"
@@ -116,6 +126,11 @@ class Settings(BaseSettings):
     # Governance (Milestone 6)
     policy_path: Path = PROJECT_ROOT / "config" / "policy.yaml"
     audit_store: AuditStoreKind = AuditStoreKind.MEMORY
+
+    # Human approval (Milestone 7)
+    data_store: DataStoreKind = DataStoreKind.MEMORY
+    checkpoint_store: CheckpointStoreKind = CheckpointStoreKind.SQLITE
+    approval_ttl_hours: int = Field(default=168, ge=1, le=24 * 90)
 
 
 @lru_cache(maxsize=1)

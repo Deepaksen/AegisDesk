@@ -6,8 +6,8 @@ agent can *ask* for it, but `create_access_request` recomputes it itself, so
 what the agent believes about eligibility never matters.
 
 Approval is not decided here. This module only says which approvals a request
-needs. Collecting them is the approval workflow (Milestone 7), and policy
-enforcement moves to OPA in Milestone 6.
+needs and records them. Collecting decisions is the approval workflow
+(`aegisdesk.approvals`, Milestone 7).
 """
 
 from __future__ import annotations
@@ -70,6 +70,64 @@ class AccessRequest(BaseModel):
     approvals_required: list[Approval]
     created_at: datetime
     justification: str
+    # The conversation that asked for it: the workflow to resume after approval.
+    thread_id: str | None = None
+    # Set once, when access is granted. Provisioning never happens twice.
+    provisioned_at: datetime | None = None
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
+class ApprovalStep(BaseModel):
+    """Who must decide one step of a request: a named person, or anyone holding a role."""
+
+    step: Approval
+    approver_id: str | None
+    approver_role: str | None
+
+
+class ApprovalRecord(BaseModel):
+    approval_id: str
+    access_request_id: str
+    requester_id: str
+    application_id: str
+    step: Approval
+    approver_id: str | None
+    approver_role: str | None
+    status: ApprovalStatus
+    thread_id: str | None
+    requested_at: datetime
+    expires_at: datetime
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    comment: str | None = None
+
+
+# Role that approves each non-manager step (see data/seed/employees.json).
+STEP_ROLES = {Approval.SECURITY: "security_approver", Approval.DATA_OWNER: "data_owner"}
+
+
+def approval_steps(employee: Employee, approvals: list[Approval]) -> list[ApprovalStep]:
+    """Resolve who approves each step. Manager: the requester's manager, if any."""
+    steps = []
+    for approval in approvals:
+        if approval is Approval.MANAGER and employee.manager_id:
+            steps.append(
+                ApprovalStep(step=approval, approver_id=employee.manager_id, approver_role=None)
+            )
+        elif approval is Approval.MANAGER:
+            # No manager on record (e.g. a department head): any other manager may decide.
+            steps.append(ApprovalStep(step=approval, approver_id=None, approver_role="manager"))
+        else:
+            steps.append(
+                ApprovalStep(step=approval, approver_id=None, approver_role=STEP_ROLES[approval])
+            )
+    return steps
 
 
 class IneligibleReason(StrEnum):

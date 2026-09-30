@@ -47,6 +47,9 @@ _MODEL_ENV_VARS = (
     "MCP_TIMEOUT_SECONDS",
     "POLICY_PATH",
     "AUDIT_STORE",
+    "DATA_STORE",
+    "CHECKPOINT_STORE",
+    "APPROVAL_TTL_HOURS",
 )
 
 
@@ -110,6 +113,6 @@ def audit_log() -> InMemoryAuditLog:
 
 
 @pytest.fixture
-def gateway(audit_log: InMemoryAuditLog) -> ActionGateway:
+def gateway(audit_log: InMemoryAuditLog, repository: ServiceDeskRepository) -> ActionGateway:
     """The real policy (config/policy.yaml) in the default environment, auditing to memory."""
-    return build_gateway(Settings(), audit=audit_log)
+    return build_gateway(Settings(), audit=audit_log, access_store=repository.access_store)

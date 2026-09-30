@@ -79,11 +79,16 @@ def test_topology(repository: ServiceDeskRepository, retriever: Retriever) -> No
     assert set(graph.nodes) == {
         "__start__", "start_turn", "classify_request", "supervisor",
         "knowledge", "service_desk", "access", "respond", "__end__",
+        "await_approval", "apply_approvals",  # Milestone 7
     }  # fmt: skip
     edges = {(e.source, e.target) for e in graph.edges}
     for specialist in ("knowledge", "service_desk", "access"):
         assert ("supervisor", specialist) in edges and (specialist, "supervisor") in edges
     assert ("supervisor", "respond") in edges and ("respond", "__end__") in edges
+    assert ("respond", "await_approval") in edges
+    assert ("await_approval", "await_approval") in edges  # pause again until every step decided
+    assert ("await_approval", "apply_approvals") in edges
+    assert ("apply_approvals", "__end__") in edges
 
 
 def test_tool_isolation_per_agent(repository: ServiceDeskRepository, retriever: Retriever) -> None:

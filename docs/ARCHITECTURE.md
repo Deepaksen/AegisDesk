@@ -11,7 +11,7 @@ This document describes the **target** architecture and marks what has been buil
 | M4 Multi-agent | ✅ built ([notes](milestones/M4-multi-agent.md), [design](AGENT_DESIGN.md)) |
 | M5 MCP | ✅ built ([notes](milestones/M5-mcp.md), [design](MCP_DESIGN.md)) |
 | M6 Governance | ✅ built ([notes](milestones/M6-governance.md), [design](GOVERNANCE_DESIGN.md)) |
-| M7 Human approval | not started |
+| M7 Human approval | ✅ built ([notes](milestones/M7-approvals.md), [design](APPROVALS_DESIGN.md)) |
 | M8 Observability | not started |
 | M9 Evaluations | not started |
 | M10 API + UI | not started |
@@ -57,7 +57,22 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M6
+## What exists after M7
+
+### Approval workflow
+
+```
+access agent ─► create_access_request ─► request + approval steps (store)
+respond ─► await_approval ─► INTERRUPT (checkpoint)  ···  manager: approvals approve AP-… (checks, audit)
+                ▲    │                                              │ resume(thread)
+     still waiting    └─ all decided (store) ─► apply_approvals ◄───┘
+                                                 provision_access as access_workflow
+                                                 (HIGH: gateway requires store-found approval evidence)
+```
+
+* **Approvals** (`src/aegisdesk/approvals/`, `domain/access_store*.py`, migration 0003): steps created with the request; decisions by the named manager or role holder, with separation of duties, expiry and idempotency; the resumed workflow provisions through the gateway. Durable with `DATA_STORE=postgres` and `CHECKPOINT_STORE=postgres`. See [APPROVALS_DESIGN.md](APPROVALS_DESIGN.md), [ADR 0011](adr/0011-approval-interrupt-resume.md) and [ADR 0012](adr/0012-postgres-for-workflow-state.md).
+
+From M6:
 
 ### Governance: every tool call
 
@@ -197,14 +212,14 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `governance/` | `src/aegisdesk/governance/` (policy data in `config/policy.yaml`); audit in `src/aegisdesk/audit/` | M6 |
 | `persistence/` | `src/aegisdesk/persistence/` (checkpointer) | M2 |
 | `migrations/` | `migrations/` (Alembic), `alembic.ini` | M3 |
-| `approvals/` | … | M7 |
+| `approvals/` | `src/aegisdesk/approvals/` | M7 |
 | `observability/`, `infrastructure/` | … | M8 |
 | `evals/` | `evals/datasets/` (data), `src/aegisdesk/evals/` (evaluators) | M3 (retrieval); M9 (full suite) |
 | `apps/api`, `apps/ui` | … | M10 |
 
 ## Diagrams still to come
 
-Written as each milestone lands: approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
+Written as each milestone lands: workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
 
 ## Decisions
 

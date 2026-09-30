@@ -56,7 +56,8 @@ def _executor(
         agent_type="single_agent",
         environment=settings.aegis_env.value,
     )
-    return ToolExecutor(tools, gateway=build_gateway(settings), agent=identity)
+    gateway = build_gateway(settings, access_store=repository.access_store)
+    return ToolExecutor(tools, gateway=gateway, agent=identity)
 
 
 def build_service_desk_agent(

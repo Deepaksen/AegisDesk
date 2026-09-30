@@ -35,6 +35,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 
 from aegisdesk.agents.loop import (
     STEP_LIMIT_ANSWER,
@@ -61,6 +62,10 @@ NODE_LIMIT = "limit_reached"
 
 # Called with (node name, the partial state update that node returned).
 UpdateCallback = Callable[[str, dict[str, Any]], None]
+
+
+class NotPausedError(RuntimeError):
+    """Resume was requested for a thread that is not waiting for anything."""
 
 
 class ThreadAccessError(PermissionError):
@@ -284,30 +289,74 @@ class ThreadedGraphAgent:
             "user": claims_from(user),
             "request_id": request_id,
         }
+        before = len(self.graph.get_state(self._config(thread_id)).values.get("messages", []))
         for node, update in self._stream(turn_input, thread_id):
             if on_update is not None:
                 on_update(node, update)
+        return self._result(thread_id, request_id, started, first_new=before + 1)
 
+    def resume(self, thread_id: str, *, on_update: UpdateCallback | None = None) -> AgentRun:
+        """Continue a thread paused for approval (Milestone 7).
+
+        Called by the approval service after a human decision, not by the thread's
+        owner, so there is no ownership check: what may happen next is decided by
+        the approval records, which the resumed nodes read themselves. No model is
+        called on this path.
+        """
+        snapshot = self.graph.get_state(self._config(thread_id))
+        if not snapshot.interrupts:
+            raise NotPausedError(f"Thread {thread_id!r} is not waiting for approval.")
+        started = time.perf_counter()
+        before = len(snapshot.values.get("messages", []))
+        # The value is informational only; the nodes re-read the approval store.
+        command: Command[Any] = Command(resume={"event": "approval_decided"})
+        for chunk in self.graph.stream(command, self._config(thread_id), stream_mode="updates"):
+            for node, update in chunk.items():
+                if on_update is not None and node != "__interrupt__":
+                    on_update(node, update or {})
+        request_id = str(snapshot.values.get("request_id", ""))
+        return self._result(thread_id, request_id, started, first_new=before)
+
+    def pending_approvals(self, thread_id: str) -> list[dict[str, Any]]:
+        snapshot = self.graph.get_state(self._config(thread_id))
+        return [
+            item
+            for pending in snapshot.interrupts
+            if isinstance(pending.value, dict)
+            for item in pending.value.get("pending", [])
+        ]
+
+    def _result(
+        self, thread_id: str, request_id: str, started: float, *, first_new: int
+    ) -> AgentRun:
         state: dict[str, Any] = self.graph.get_state(self._config(thread_id)).values
+        messages = list(state["messages"])
+        # Everything the assistant said in this turn (an answer, then maybe an approval update).
+        said = [
+            m.text for m in messages[first_new:] if isinstance(m, AIMessage) and not m.tool_calls
+        ]
         return AgentRun(
             agent_name=self.name,
             agent_version=self.version,
             prompt_name=self._prompt.name,
             prompt_version=self._prompt.version,
             request_id=request_id,
-            answer=state["messages"][-1].text,
+            answer="\n\n".join(said) if said else messages[-1].text,
             stop_reason=StopReason(state["stop_reason"]),
             trajectory=[step_from_entry(entry) for entry in state["trajectory"]],
-            history=list(state["messages"]),
+            history=messages,
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
             usage=TokenUsage(state["input_tokens"], state["output_tokens"]),
             thread_id=thread_id,
+            pending_approvals=self.pending_approvals(thread_id),
         )
 
     def _stream(self, turn_input: dict[str, Any], thread_id: str) -> Iterator[tuple[str, Any]]:
         # stream_mode="updates" yields {node_name: update} after each node finishes.
         for chunk in self.graph.stream(turn_input, self._config(thread_id), stream_mode="updates"):
             for node, update in chunk.items():
+                if node == "__interrupt__":  # a pause, reported via pending_approvals
+                    continue
                 yield node, update or {}
 
 

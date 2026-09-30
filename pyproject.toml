@@ -21,6 +21,7 @@ dependencies = [
     "pyjwt>=2.8",
     "uvicorn>=0.30",
     "starlette>=0.40",
+    "langgraph-checkpoint-postgres>=2.0",
 ]
 
 [project.scripts]

@@ -241,4 +241,10 @@ def test_declared_risk_matches_the_policy(
 
 def test_shipped_policy_is_valid(engine: PolicyEngine) -> None:
     assert isinstance(engine.data, PolicyData)
-    assert all(r.risk is not ToolRisk.HIGH for r in engine.data.tools.values())
+    high = {name for name, r in engine.data.tools.items() if r.risk is ToolRisk.HIGH}
+    assert high == {"provision_access"}
+
+
+def test_only_the_approval_workflow_may_provision(engine: PolicyEngine) -> None:
+    holders = {agent for agent, tools in engine.data.agents.items() if "provision_access" in tools}
+    assert holders == {"access_workflow"}

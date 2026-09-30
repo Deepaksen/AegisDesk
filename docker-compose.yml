@@ -1,7 +1,7 @@
 # Local infrastructure. Grows milestone by milestone (OPA, MCP servers, observability, UI...).
 #
 #   docker compose up -d postgres
-#   DATABASE_URL=postgresql+psycopg://aegisdesk:aegisdesk@localhost:5432/aegisdesk uv run alembic upgrade head
+#   DATABASE_URL=postgresql+psycopg://aegisdesk:aegisdesk@localhost:5432/aegisdesk uv run aegisdesk db init
 #   VECTOR_STORE=pgvector uv run aegisdesk rag ingest
 services:
   postgres:

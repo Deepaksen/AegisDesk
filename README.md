@@ -15,6 +15,7 @@ All data is synthetic.
 | M4 Multi-agent ✅ | Supervisor with a structured router and deterministic dispatch; Knowledge, Service Desk and Access specialists as subgraphs with isolated tools and context; bounded handoffs; code-checked citations; access domain with deterministic eligibility (requests recorded, never granted) | [M4](docs/milestones/M4-multi-agent.md) |
 | M5 MCP ✅ | Enterprise tools behind a read and an action MCP server (in-process or Streamable HTTP); per-call signed delegation tokens carry user, agent, request ID and server audience; discovery with risk annotations; timeouts, read-only retries, no write retries; local vs remote comparison | [M5](docs/milestones/M5-mcp.md) |
 | M6 Governance ✅ | Action gateway on every tool call (host and MCP servers): deterministic policy from `config/policy.yaml` (agent grants, risk classes, authorized writes, forbidden actions, environments), fail-closed; append-only audit events in PostgreSQL (UPDATE/DELETE/TRUNCATE rejected); deliberate bypass attempts tested | [M6](docs/milestones/M6-governance.md) |
+| M7 Human approval ✅ | Sensitive access requests pause the LangGraph workflow (`interrupt`), survive restarts (PostgreSQL access store + checkpointer), and resume on the approver's decision; approver rules with separation of duties, expiry and idempotency; provisioning only by the workflow identity with gateway-verified approval evidence; audited end to end | [M7](docs/milestones/M7-approvals.md) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the target architecture and progress.
 
@@ -46,6 +47,13 @@ uv run aegisdesk agent --as E1004 --tools mcp_inprocess "What laptop is assigned
 MCP_TOKEN_SECRET=<32+ chars> uv run aegisdesk mcp serve               # HTTP: :8765/read/mcp, /action/mcp
 MCP_TOKEN_SECRET=<same> TOOL_TRANSPORT=mcp_http uv run aegisdesk agent --as E1004 "..."
 
+# Human approval (M7): durable across processes with PostgreSQL
+export DATA_STORE=postgres CHECKPOINT_STORE=postgres AUDIT_STORE=postgres DATABASE_URL=...
+uv run aegisdesk db init                                            # migrations + checkpoint tables + seed
+uv run aegisdesk agent --as E1004 "Please create an access request for FinanceERP for month-end reporting"
+uv run aegisdesk approvals list --as E1010
+uv run aegisdesk approvals approve AP-0001 --as E1010 --comment "ok"   # resumes the employee's thread
+
 # Governance (M6)
 uv run aegisdesk policy check --as E1004 --agent knowledge --tool create_ticket   # DENY + reasons
 AUDIT_STORE=postgres uv run aegisdesk audit --user E1004                          # needs DATABASE_URL + migrations
@@ -58,7 +66,7 @@ uv run aegisdesk eval rag                                            # retrieval
 
 For a persistent pgvector index: `docker compose up -d postgres`, set `DATABASE_URL` and `VECTOR_STORE=pgvector`, then run `uv run alembic upgrade head` and `uv run aegisdesk rag ingest`. For semantic embeddings: `ollama pull nomic-embed-text` and `EMBEDDING_PROVIDER=ollama`.
 
-Synthetic users include `E1004` (finance), `E1001` (engineering), `E1005` (contractor), `E1006` (IT admin), `E1010` (finance manager), `E1014` (HR admin) and `E1007` (terminated, so login is refused). See [`data/seed/`](data/seed/).
+Synthetic users include `E1004` (finance), `E1001` (engineering), `E1005` (contractor), `E1006` (IT admin), `E1010` (finance manager), `E1014` (HR admin), `E1015` (security approver), `E1016` (data owner) and `E1007` (terminated, so login is refused). See [`data/seed/`](data/seed/).
 
 ### Choosing a model
 

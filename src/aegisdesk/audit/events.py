@@ -21,6 +21,7 @@ PostgreSQL table also rejects UPDATE, DELETE and TRUNCATE with triggers
 
 from __future__ import annotations
 
+import re
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -123,7 +124,18 @@ class InMemoryAuditLog:
             return list(self._events)
 
 
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
 def resource_ids(args: dict[str, Any]) -> dict[str, str]:
-    """The identifiers in a tool's validated arguments; no free text."""
-    keys = ("ticket_id", "application", "document_id")
-    return {k: str(args[k]) for k in keys if args.get(k) is not None}
+    """The identifiers in a tool's validated arguments; no free text.
+
+    Some identifier fields are written by the model (`application` may be
+    "FinanceERP" or a whole sentence), so only identifier-shaped values are kept.
+    """
+    keys = ("ticket_id", "application", "document_id", "access_request_id")
+    return {
+        k: str(args[k])
+        for k in keys
+        if args.get(k) is not None and _IDENTIFIER.fullmatch(str(args[k]))
+    }

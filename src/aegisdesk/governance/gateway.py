@@ -29,10 +29,16 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from aegisdesk.audit.events import AuditError, AuditEvent, AuditLog, AuditPhase, resource_ids
-from aegisdesk.governance.policy import Decision, PolicyDecision, PolicyEngine, PolicyInput
+from aegisdesk.governance.policy import (
+    ApprovalEvidence,
+    Decision,
+    PolicyDecision,
+    PolicyEngine,
+    PolicyInput,
+)
 from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import UserContext
 from aegisdesk.tools.base import ToolAccess, ToolRisk
@@ -40,6 +46,14 @@ from aegisdesk.tools.base import ToolAccess, ToolRisk
 logger = logging.getLogger(__name__)
 
 AUDIT_UNAVAILABLE = "audit_unavailable"
+
+
+class ApprovalVerifier(Protocol):
+    """Finds recorded approval for a call from trusted state, or returns None."""
+
+    def evidence(
+        self, *, tool: str, args: dict[str, Any], user: UserContext
+    ) -> ApprovalEvidence | None: ...
 
 
 @dataclass(frozen=True)
@@ -55,10 +69,18 @@ class Authorization:
 
 
 class ActionGateway:
-    def __init__(self, policy: PolicyEngine, audit: AuditLog, *, environment: str) -> None:
+    def __init__(
+        self,
+        policy: PolicyEngine,
+        audit: AuditLog,
+        *,
+        environment: str,
+        approvals: ApprovalVerifier | None = None,
+    ) -> None:
         self.policy = policy
         self.audit = audit
         self.environment = environment
+        self.approvals = approvals
 
     def authorize(
         self,
@@ -71,8 +93,18 @@ class ActionGateway:
         request_id: str,
         thread_id: str | None = None,
     ) -> Authorization:
+        evidence = None
+        if self.approvals is not None:
+            # From the store, keyed by the validated arguments; nothing the caller asserts.
+            evidence = self.approvals.evidence(tool=tool, args=args, user=user)
         decision = self.policy.evaluate(
-            PolicyInput(tool=tool, user=user, agent=agent, environment=self.environment)
+            PolicyInput(
+                tool=tool,
+                user=user,
+                agent=agent,
+                environment=self.environment,
+                approval=evidence,
+            )
         )
         event = AuditEvent(
             phase=AuditPhase.DECISION,
@@ -89,6 +121,12 @@ class ActionGateway:
             policy_decision=decision.decision.value,
             policy_reasons=decision.reasons,
             policy_version=decision.policy_version,
+            approval_id=",".join(evidence.approval_ids)
+            if evidence and evidence.approval_ids
+            else None,
+            approver_id=",".join(evidence.approver_ids)
+            if evidence and evidence.approver_ids
+            else None,
             outcome=decision.decision.value,
         )
         try:
