@@ -1,0 +1,21 @@
+flowchart TB
+  subgraph people["Users"]
+    direction LR
+    emp["👤 Employee<br/><small>asks IT questions,<br/>requests access</small>"]
+    mgr["👤 Manager / approver<br/><small>approves or rejects</small>"]
+    adm["👤 IT admin / auditor<br/><small>audit, reconcile, operate</small>"]
+  end
+  gw["Authenticating gateway<br/><small>SSO proxy · sets X-Employee-Id</small>"]
+  core["<b>AegisDesk</b><br/>agentic IT service desk<br/><small>UI · API · agents · tools · governance</small>"]
+  subgraph ext["External systems"]
+    direction LR
+    llm["LLM providers<br/><small>Anthropic · Ollama ·<br/>offline fake</small>"]
+    ent[("Enterprise data<br/><small>directory, assets,<br/>tickets, access (synthetic)</small>")]
+    kb[("Knowledge base<br/><small>12 policy &amp;<br/>how-to documents</small>")]
+    obs["Observability<br/><small>Collector · Tempo ·<br/>Prometheus · Grafana</small>"]
+  end
+  people --> gw -->|"HTTPS + identity header"| core
+  core -->|"prompts, tool schemas"| llm
+  core -->|"MCP + delegation tokens"| ent
+  core -->|"access-filtered retrieval"| kb
+  core -->|"traces · metrics · logs"| obs

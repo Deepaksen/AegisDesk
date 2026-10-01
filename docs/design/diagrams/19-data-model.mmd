@@ -1,0 +1,48 @@
+erDiagram
+  ACCESS_REQUESTS ||--o{ APPROVALS : "approval steps"
+  ACCESS_REQUESTS ||--o| EMPLOYEE_ACCESS : "grants"
+  DOCUMENTS ||--o{ DOCUMENT_CHUNKS : "chunked into"
+  ACCESS_REQUESTS {
+    text request_id PK
+    text employee_id
+    text status
+    text thread_id
+    timestamptz provisioned_at
+    text idempotency_key UK
+  }
+  APPROVALS {
+    text approval_id PK
+    text access_request_id FK
+    text step
+    text status
+    text decided_by
+  }
+  EMPLOYEE_ACCESS {
+    text employee_id PK
+    text application_id PK
+    date granted_on PK
+    text access_request_id FK
+  }
+  AUDIT_EVENTS {
+    text event_id PK
+    text phase
+    text request_id
+    text trace_id
+    text tool
+    text policy_decision
+    text outcome
+  }
+  IDEMPOTENCY_RECORDS {
+    text user_id PK
+    text idem_key PK
+    text status
+    jsonb response
+  }
+  DOCUMENTS {
+    text document_id PK
+    text classification
+  }
+  DOCUMENT_CHUNKS {
+    text chunk_id PK
+    vector embedding
+  }

@@ -1,0 +1,18 @@
+flowchart TB
+  idea["Use-case idea"] --> intake["Intake and risk triage<br/><small>Credo AI: risk tier, required controls</small>"]
+  intake --> scaf["Scaffold from a template<br/><small>GenX portal or CLI</small>"]
+  scaf --> reg["Register the agent<br/><small>Lyzr · identity in Okta or Entra</small>"]
+  reg --> tools["Choose or publish tools<br/><small>Apigee API hub · MCP</small>"]
+  tools --> ev["Write evaluation datasets<br/><small>golden · adversarial · reliability</small>"]
+  ev --> assure["Assure<br/><small>eval gates · red team · evidence</small>"]
+  assure --> go{"Go-live approval"}
+  go --> run["Deploy through the pipeline and operate<br/><small>SLOs · budgets · risk index</small>"]
+  class scaf,ev,assure,run core
+  class intake,reg,tools vendor
+  class go gov
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

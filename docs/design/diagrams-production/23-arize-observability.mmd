@@ -1,0 +1,19 @@
+flowchart TB
+  app["AegisDesk<br/><small>OTel SDK · GenAI and OpenInference attributes</small>"] --> red["Redacting span processor<br/><small>allowlisted attributes only</small>"]
+  red --> col["OTel collector · per cloud"]
+  col --> ar["Arize AX<br/><small>traces · sessions · agent graphs</small>"]
+  col --> infra["Tempo · Prometheus · cloud monitoring<br/><small>infrastructure view</small>"]
+  ar --> on["Online evaluations<br/><small>groundedness · routing · tool use · refusals</small>"]
+  ar --> mon["Monitors · dashboards · alerts"]
+  on --> ds["Datasets curated from failures"]
+  ds --> ci["CI suites: golden · adversarial"]
+  ci -- "gate the next release" --> app
+  class app,red,col,ci core
+  class ar,on,mon,ds vendor
+  class infra muted
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

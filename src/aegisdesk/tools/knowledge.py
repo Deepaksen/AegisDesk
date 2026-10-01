@@ -122,8 +122,9 @@ def build_knowledge_tools(retriever: Retriever) -> list[ToolSpec[Any, Any]]:
         ToolSpec(
             name="search_knowledge_base",
             description=(
-                "Search Northstar's IT and company policy documentation: how-to guides, "
-                "troubleshooting steps and error messages (VPN, passwords, software, devices), "
+                "Search Northstar's IT and company policy documentation: how-to guides for "
+                "setting up and configuring things, troubleshooting steps and error messages "
+                "(VPN, passwords, software, devices), "
                 "and policies (application and privileged access, security, remote working). "
                 "Returns relevant passages with chunk IDs to cite."
             ),

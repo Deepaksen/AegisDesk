@@ -142,6 +142,19 @@ class CreateTicketInput(_StrictInput):
     )
 
 
+class AddTicketCommentInput(_StrictInput):
+    ticket_id: TicketId
+    comment: str = Field(
+        min_length=5, max_length=1000, description="Update or extra information for the ticket."
+    )
+
+
+class AddTicketCommentOutput(BaseModel):
+    ticket_id: str
+    comment_id: str
+    created: bool = Field(description="False if this exact comment had already been added.")
+
+
 class CreateTicketOutput(BaseModel):
     ticket: TicketView
     created: bool = Field(description="False if this exact request had already created it.")
@@ -182,6 +195,24 @@ def build_service_desk_tools(repository: ServiceDeskRepository) -> list[ToolSpec
             idempotency_key=ctx.idempotency_key,
         )
         return CreateTicketOutput(ticket=TicketView.of(ticket), created=created)
+
+    def add_ticket_comment(
+        args: AddTicketCommentInput, ctx: ToolCallContext
+    ) -> AddTicketCommentOutput:
+        if ctx.idempotency_key is None:
+            raise RuntimeError("add_ticket_comment requires an idempotency key from the executor")
+        ticket = repository.get_ticket(args.ticket_id)
+        if ticket is None or ticket.requester_id != ctx.user.employee_id:
+            raise NotFoundError(f"No ticket {args.ticket_id} found for you.")
+        comment, created = repository.add_ticket_comment(
+            ticket_id=ticket.ticket_id,
+            author_id=ctx.user.employee_id,
+            body=args.comment.strip(),
+            idempotency_key=ctx.idempotency_key,
+        )
+        return AddTicketCommentOutput(
+            ticket_id=ticket.ticket_id, comment_id=comment.comment_id, created=created
+        )
 
     return [
         ToolSpec(
@@ -232,6 +263,20 @@ def build_service_desk_tools(repository: ServiceDeskRepository) -> list[ToolSpec
             input_model=CreateTicketInput,
             output_model=CreateTicketOutput,
             handler=create_ticket,
+            risk=ToolRisk.MEDIUM,
+            access=ToolAccess.WRITE,
+            idempotent=True,  # via the idempotency key
+            owner=OWNER,
+        ),
+        ToolSpec(
+            name="add_ticket_comment",
+            description=(
+                "Add an update to one of the signed-in employee's own open tickets, for example "
+                "new symptoms or steps already tried."
+            ),
+            input_model=AddTicketCommentInput,
+            output_model=AddTicketCommentOutput,
+            handler=add_ticket_comment,
             risk=ToolRisk.MEDIUM,
             access=ToolAccess.WRITE,
             idempotent=True,  # via the idempotency key

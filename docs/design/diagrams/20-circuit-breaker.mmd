@@ -1,0 +1,10 @@
+stateDiagram-v2
+  direction LR
+  [*] --> Closed
+  Closed --> Closed: success (reset count)
+  Closed --> Open: N consecutive failures
+  Open --> Open: calls fail fast
+  Open --> HalfOpen: reset timeout elapsed
+  HalfOpen --> Closed: trial succeeds
+  HalfOpen --> Open: trial fails
+  note right of Open: one breaker per model and per MCP server, per process

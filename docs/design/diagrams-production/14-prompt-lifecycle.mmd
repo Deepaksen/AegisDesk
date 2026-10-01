@@ -1,0 +1,20 @@
+flowchart TB
+  pr["Prompt change in git<br/><small>pull request, reviewed like code</small>"] --> ev["Eval gates + Arize experiment<br/><small>new version vs current</small>"]
+  ev --> ver["Versioned release<br/><small>e.g. router v5, label prod</small>"]
+  ver --> pub["Publish to each cloud's prompt store"]
+  pub --> g["Vertex AI<br/>prompt management"]
+  pub --> a["Bedrock<br/>Prompt Management"]
+  pub --> z["Microsoft Foundry"]
+  g --> rt["Runtime resolves name + label<br/><small>cached · checksum verified</small>"]
+  a --> rt
+  z --> rt
+  ver -. "bundled fallback in the image" .-> rt
+  class pr,ver,pub,rt core
+  class ev vendor
+  class g,a,z cloud
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

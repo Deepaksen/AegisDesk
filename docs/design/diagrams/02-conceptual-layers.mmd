@@ -1,0 +1,27 @@
+flowchart TB
+  subgraph X["1 · Experience"]
+    direction LR
+    ui["Streamlit UI"] ~~~ api["HTTP API"] ~~~ cli["CLI"]
+  end
+  subgraph O["2 · Orchestration (LLM)"]
+    direction LR
+    sup["Supervisor"] ~~~ spec["Specialist agents"]
+  end
+  subgraph C["3 · Capabilities"]
+    direction LR
+    tools["Typed tools"] ~~~ mcp["MCP servers"] ~~~ rag["RAG"]
+  end
+  subgraph G["4 · Governance (code)"]
+    direction LR
+    idn["Identity"] ~~~ pol["Policy + gateway"] ~~~ appr["Human approval"] ~~~ aud["Audit"]
+  end
+  subgraph D["5 · Data"]
+    direction LR
+    pg[("PostgreSQL + pgvector")] ~~~ seed[("Seed data + documents")]
+  end
+  subgraph Z["6 · Cross-cutting"]
+    direction LR
+    llm["Model layer"] ~~~ obs["Observability"] ~~~ ev["Evaluation"] ~~~ rel["Reliability"]
+  end
+  X --> O --> C --> G --> D
+  D ~~~ Z

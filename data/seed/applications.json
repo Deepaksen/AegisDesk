@@ -1,0 +1,10 @@
+[
+  {"application_id": "APP-JIRA", "name": "Jira", "description": "Issue and project tracking.", "owner": "Engineering Enablement", "allowed_departments": [], "allowed_roles": [], "contractors_allowed": true, "approvals": [], "privileged": false},
+  {"application_id": "APP-CONF", "name": "Confluence", "description": "Company wiki and documentation.", "owner": "Engineering Enablement", "allowed_departments": [], "allowed_roles": [], "contractors_allowed": true, "approvals": [], "privileged": false},
+  {"application_id": "APP-GH", "name": "GitHub", "description": "Source code hosting (northstar-eng organisation).", "owner": "Engineering Enablement", "allowed_departments": ["engineering"], "allowed_roles": [], "contractors_allowed": true, "approvals": [], "privileged": false},
+  {"application_id": "APP-SF", "name": "Salesforce", "description": "Customer relationship management.", "owner": "Sales Operations", "allowed_departments": ["sales"], "allowed_roles": [], "contractors_allowed": false, "approvals": [], "privileged": false},
+  {"application_id": "APP-FIN", "name": "FinanceERP", "description": "Finance ledger, invoices and period close.", "owner": "Finance Systems", "allowed_departments": ["finance"], "allowed_roles": [], "contractors_allowed": false, "approvals": ["manager"], "privileged": false},
+  {"application_id": "APP-AH", "name": "AnalyticsHub", "description": "Business reporting and dashboards.", "owner": "Data Platform", "allowed_departments": ["finance", "sales"], "allowed_roles": [], "contractors_allowed": false, "approvals": ["data_owner"], "privileged": false},
+  {"application_id": "APP-PDB", "name": "ProductionDB", "description": "Production databases (read-only by default).", "owner": "Platform Engineering", "allowed_departments": [], "allowed_roles": ["it_admin"], "contractors_allowed": false, "approvals": ["manager", "security"], "privileged": true},
+  {"application_id": "APP-HR", "name": "HRAdmin", "description": "HR administration system.", "owner": "People Team", "allowed_departments": [], "allowed_roles": ["hr_admin"], "contractors_allowed": false, "approvals": ["manager", "security"], "privileged": true}
+]

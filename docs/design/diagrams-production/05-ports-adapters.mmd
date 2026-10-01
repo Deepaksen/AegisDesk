@@ -1,0 +1,36 @@
+flowchart LR
+  subgraph CORE["AegisDesk core"]
+    direction LR
+    agents["Agents and graphs"]
+    gw["Policy gateway"]
+    appr["Approvals · audit"]
+  end
+  subgraph PORTS["Ports"]
+    direction LR
+    pm["Model"]
+    pp["Prompt"]
+    pmem["Memory"]
+    ps["Session"]
+    pw["Workflow"]
+    pt["Telemetry"]
+    psec["Secrets"]
+  end
+  subgraph ADP["Adapters"]
+    direction LR
+    ag["<b>GCP</b><br/><small>Vertex AI models<br/>Memory Bank<br/>Secret Manager</small>"]
+    aa["<b>AWS</b><br/><small>Bedrock models<br/>AgentCore Memory<br/>Secrets Manager</small>"]
+    az["<b>Azure</b><br/><small>Foundry models<br/>Foundry memory<br/>Key Vault</small>"]
+    ax["<b>Any cloud</b><br/><small>Temporal · OTel to Arize<br/>local fallbacks</small>"]
+  end
+  CORE -- "depends only on" --> PORTS
+  ADP -- "implement" --> PORTS
+  class agents,gw,appr core
+  class pm,pp,pmem,ps,pw,pt,psec gov
+  class ag,aa,az cloud
+  class ax vendor
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

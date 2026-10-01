@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass
 
 from aegisdesk.identity.context import UserContext
+from aegisdesk.observability import faults, tracing
+from aegisdesk.observability.metrics import instruments
 from aegisdesk.rag.embeddings import Embedder
 from aegisdesk.rag.models import ScoredChunk
 from aegisdesk.rag.retrieval.access import AccessFilter
@@ -70,13 +72,32 @@ class Retriever:
     ) -> RetrievalResult:
         k = top_k or self.top_k
         started = time.perf_counter()
-        vector = self._embedder.embed_query(query)
-        found = self._store.search(vector, k, AccessFilter.for_user(user), self._embedder.info)
-        return RetrievalResult(
-            query=query,
-            chunks=[s for s in found if s.score >= self.min_score],
-            below_threshold=[s for s in found if s.score < self.min_score],
-            latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            top_k=k,
-            min_score=self.min_score,
-        )
+        with tracing.span(
+            "rag.retrieve",
+            **{"aegisdesk.rag.top_k": k, "aegisdesk.rag.embedding_model": self.embedding_model},
+        ) as current:
+            if faults.active("retrieval_error"):
+                raise faults.InjectedFaultError("injected retrieval_error")
+            vector = self._embedder.embed_query(query)
+            found = self._store.search(vector, k, AccessFilter.for_user(user), self._embedder.info)
+            result = RetrievalResult(
+                query=query,
+                chunks=[s for s in found if s.score >= self.min_score],
+                below_threshold=[s for s in found if s.score < self.min_score],
+                latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                top_k=k,
+                min_score=self.min_score,
+            )
+            # Document and chunk IDs, scores and counts: never the query or chunk text.
+            current.set_attribute("aegisdesk.rag.document_ids", result.document_ids)
+            current.set_attribute(
+                "aegisdesk.rag.chunk_ids", [s.chunk.chunk_id for s in result.chunks]
+            )
+            current.set_attribute("aegisdesk.rag.no_evidence", not result.sufficient_evidence)
+            if found:
+                current.set_attribute("aegisdesk.rag.top_score", round(found[0].score, 4))
+        m = instruments()
+        m.rag_latency.record(result.latency_ms / 1000, {"store": type(self._store).__name__})
+        if not result.sufficient_evidence:
+            m.rag_no_evidence.add(1)
+        return result

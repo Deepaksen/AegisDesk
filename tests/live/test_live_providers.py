@@ -15,8 +15,11 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
+from aegisdesk.agents.loop import RouteStep
 from aegisdesk.agents.service_desk import build_service_desk_agent, build_service_desk_graph_agent
+from aegisdesk.agents.supervisor import build_supervisor_agent
 from aegisdesk.config import ModelProvider, Settings
 from aegisdesk.domain.repository import ServiceDeskRepository
 from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
@@ -160,3 +163,35 @@ def test_ollama_embeddings_pass_the_retrieval_gate(tmp_path: Path) -> None:
     )
     assert report.access_violations == 0
     assert report.hit_rate >= 0.85
+
+
+@pytest.mark.parametrize(
+    ("employee_id", "message", "expected_agents"),
+    [
+        ("E1004", "How do I configure VPN on macOS?", {"knowledge"}),
+        ("E1004", "What laptop is assigned to me?", {"service_desk"}),
+        ("E1004", "I need FinanceERP access for month-end reporting.", {"access"}),
+        (
+            "E1004",
+            "What does VPN error GP-512 mean, and can I get access to AnalyticsHub?",
+            {"knowledge", "access"},
+        ),
+    ],
+)
+def test_supervisor_routes_spec_scenarios(
+    live_settings: Settings,
+    retriever: Retriever,
+    employee_id: str,
+    message: str,
+    expected_agents: set[str],
+) -> None:
+    repository = ServiceDeskRepository.from_seed(live_settings.seed_data_dir)
+    agent = build_supervisor_agent(
+        live_settings, repository, checkpointer=InMemorySaver(), retriever=retriever
+    )
+
+    run = agent.run(message, user=authenticate(repository, employee_id))
+
+    route = run.trajectory[0]
+    assert isinstance(route, RouteStep) and route.error is None
+    assert {a for a, _ in route.tasks} == expected_agents

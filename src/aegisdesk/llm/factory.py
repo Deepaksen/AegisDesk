@@ -36,7 +36,8 @@ def build_chat_model(settings: Settings, allowlist: ModelAllowlist | None = None
                 temperature=settings.model_temperature,
                 max_tokens=settings.model_max_tokens,
                 default_request_timeout=settings.model_timeout_seconds,
-                max_retries=settings.model_max_retries,
+                # Retries belong to ModelGuard (M11): one policy, visible in traces.
+                max_retries=0,
                 anthropic_api_key=settings.anthropic_api_key,
             )
         case ModelProvider.OLLAMA:

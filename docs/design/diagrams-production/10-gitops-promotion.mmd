@@ -1,0 +1,23 @@
+flowchart TB
+  git["GitOps repository<br/><small>one overlay per environment and cloud · digests pinned</small>"]
+  git --> dev["dev<br/><small>one cloud</small>"]
+  dev --> stg["staging<br/><small>all three clouds · full evals and red team</small>"]
+  stg --> can["production canary<br/><small>small share of traffic · one cloud at a time</small>"]
+  can --> chk{"Arize online evals<br/>and SLOs healthy?"}
+  chk -- yes --> full["production 100%<br/><small>next cloud</small>"]
+  chk -- no --> rb["automatic rollback<br/><small>previous digest</small>"]
+  subgraph ARGO["Argo CD per cluster"]
+    direction LR
+    ag["GKE"] ~~~ aa["EKS"] ~~~ az["AKS"]
+  end
+  full --> ARGO
+  class git,dev,stg,can,full core
+  class chk vendor
+  class rb risk
+  class ag,aa,az cloud
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

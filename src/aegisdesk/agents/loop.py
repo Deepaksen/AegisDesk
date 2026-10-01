@@ -39,7 +39,7 @@ from langchain_core.messages.tool import ToolCall
 from aegisdesk.identity.context import UserContext
 from aegisdesk.llm.usage import TokenUsage
 from aegisdesk.prompts.loader import Prompt
-from aegisdesk.tools.executor import OutcomeStatus, ToolExecutor
+from aegisdesk.tools.executor import OutcomeStatus, ToolRunner
 
 STEP_LIMIT_ANSWER = (
     "I couldn't finish this request within the allowed number of steps. "
@@ -49,12 +49,20 @@ TOOL_LIMIT_ANSWER = (
     "This request needed more actions than I'm allowed to take at once. "
     "Please split it into smaller requests, or contact the IT service desk directly."
 )
+# Milestone 11: what the user sees when the model fails, instead of an error page.
+MODEL_UNAVAILABLE_ANSWER = (
+    "The assistant is temporarily unavailable, so I couldn't finish this request. "
+    "Please try again in a moment. Anything listed as completed above was done; "
+    "nothing else was changed."
+)
+EMPTY_ANSWER = "Sorry, I couldn't produce an answer to that. Please try rephrasing your request."
 
 
 class StopReason(StrEnum):
     FINAL_ANSWER = "final_answer"
     MAX_STEPS = "max_steps"
     MAX_TOOL_CALLS = "max_tool_calls"
+    MODEL_ERROR = "model_error"  # the model service failed (M11); the answer says so
 
 
 @dataclass(frozen=True)
@@ -73,6 +81,9 @@ class ModelStep:
     usage: TokenUsage
     latency_ms: float
     requested_tools: tuple[str, ...]
+    agent: str | None = None  # which specialist made the call (multi-agent runs)
+    # M11: model_timeout | model_unavailable | ... | malformed_tool_call | empty_response
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,32 @@ class ToolStep:
     latency_ms: float
     error_category: str | None
     result: str
+    agent: str | None = None
+
+
+@dataclass(frozen=True)
+class RouteStep:
+    """The supervisor's routing decision (multi-agent runs)."""
+
+    tasks: tuple[tuple[str, str], ...]  # (agent, instruction)
+    out_of_scope: bool
+    error: str | None
+    usage: TokenUsage
+    latency_ms: float
+
+
+@dataclass(frozen=True)
+class AgentStep:
+    """One specialist's piece of work, as the supervisor sees it (multi-agent runs)."""
+
+    agent: str
+    instruction: str
+    status: str  # done | incomplete | failed
+    answer: str
+    note: str | None = None
+
+
+TrajectoryStep = ModelStep | ToolStep | RouteStep | AgentStep
 
 
 @dataclass(frozen=True)
@@ -97,7 +134,7 @@ class AgentRun:
     request_id: str
     answer: str
     stop_reason: StopReason
-    trajectory: list[ModelStep | ToolStep]
+    trajectory: list[TrajectoryStep]
     # The conversation without the system prompt, including this turn;
     # pass it back as `history` for the next turn.
     history: list[BaseMessage]
@@ -105,10 +142,18 @@ class AgentRun:
     usage: TokenUsage = field(default_factory=TokenUsage)
     # Set when the run belongs to a persisted conversation (the LangGraph engine).
     thread_id: str | None = None
+    # Approval steps the thread is paused on (Milestone 7); empty when not paused.
+    pending_approvals: list[dict[str, Any]] = field(default_factory=list)
+    # The OpenTelemetry trace of this run (Milestone 8): joins logs, audit events, spans.
+    trace_id: str | None = None
+
+    @property
+    def awaiting_approval(self) -> bool:
+        return bool(self.pending_approvals)
 
     @property
     def llm_calls(self) -> int:
-        return sum(isinstance(s, ModelStep) for s in self.trajectory)
+        return sum(isinstance(s, ModelStep | RouteStep) for s in self.trajectory)
 
     @property
     def tool_steps(self) -> list[ToolStep]:
@@ -123,7 +168,7 @@ class ToolCallingAgent:
         version: str,
         model: BaseChatModel,
         prompt: Prompt,
-        executor: ToolExecutor,
+        executor: ToolRunner,
         limits: AgentLimits,
     ) -> None:
         self.name = name
@@ -149,7 +194,7 @@ class ToolCallingAgent:
             *(history or []),
             HumanMessage(content=user_input),
         ]
-        trajectory: list[ModelStep | ToolStep] = []
+        trajectory: list[TrajectoryStep] = []
         usage = TokenUsage()
         tool_calls_made = 0
 

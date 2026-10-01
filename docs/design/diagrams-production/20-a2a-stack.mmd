@@ -1,0 +1,17 @@
+flowchart TB
+  caller["Calling agent<br/><small>Copilot Studio · Gemini Enterprise · Lyzr</small>"] --> zs["Zscaler<br/><small>inspect prompts and payloads</small>"]
+  zs --> ap["Apigee agent gateway<br/><small>authentication · quotas · routing</small>"]
+  ap --> rt["Runtime hosting the A2A server<br/><small>AgentCore Runtime · GKE · AKS</small>"]
+  rt --> ad["AegisDesk agent<br/><small>policy gateway · audit</small>"]
+  ad -. "OTel spans, W3C trace context" .-> ar["Arize AX"]
+  ad -. "action records" .-> rb["Rubrik"]
+  cr["Credo AI<br/><small>which agents may delegate what,<br/>under which controls</small>"] -. "policy intent" .-> ap
+  class ad core
+  class zs,ap,ar,rb,cr vendor
+  class rt cloud
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

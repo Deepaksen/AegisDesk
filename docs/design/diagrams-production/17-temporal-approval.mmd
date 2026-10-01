@@ -1,0 +1,19 @@
+flowchart TB
+  start["Access request needs approval<br/><small>policy said REQUIRE_APPROVAL</small>"] --> wf["AccessApprovalWorkflow<br/><small>workflow id = access request id</small>"]
+  wf --> s1{"Manager decision<br/><small>signal · or TTL timer fires</small>"}
+  s1 -- approved --> s2{"Further steps?<br/><small>security · data owner</small>"}
+  s1 -- "rejected or expired" --> close["Notify requester · close"]
+  s2 -- "approved or none" --> act["Activity: provision access<br/><small>through the policy gateway · retries · idempotency key</small>"]
+  s2 -- "rejected or expired" --> close
+  act -- ok --> ver["Activity: verify effective access<br/><small>Veza</small>"]
+  act -- "failed after retries" --> comp["Compensate<br/><small>revoke partial grants · open a ticket</small>"]
+  ver --> done["Resume the conversation · notify"]
+  class wf,act,done core
+  class ver vendor
+  class comp risk
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

@@ -14,7 +14,11 @@ The executor decides what actually happens:
    the model gets a generic message with no stack traces or internals.
 5. **Output validation:** the handler's result must match the output schema.
 
-From Milestone 6, a policy check (OPA) is added between steps 3 and 4.
+From Milestone 6, an `ActionGateway` (policy decision + audit events) sits
+between validation and execution. A denied call, or one that needs human
+approval, never reaches the handler. Every production path builds its
+executor with a gateway; an executor without one is the ungoverned building
+block used only in unit tests.
 """
 
 from __future__ import annotations
@@ -23,15 +27,23 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
+from aegisdesk.governance.policy import Decision
+from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import UserContext
+from aegisdesk.observability import faults, tracing
+from aegisdesk.observability.metrics import instruments
+from aegisdesk.reliability.errors import StoreUnavailableError
 from aegisdesk.tools.base import ToolAccess, ToolCallContext, ToolError, ToolSpec
+
+if TYPE_CHECKING:
+    from aegisdesk.governance.gateway import ActionGateway
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +63,98 @@ class ToolOutcome:
     error_category: str | None = None
 
 
+class ToolRunner(Protocol):
+    """What an agent needs from its tools, wherever they run.
+
+    `ToolExecutor` runs tools in-process (Milestones 1-4); the MCP runner in
+    `tools/clients/mcp.py` runs them on MCP servers (Milestone 5). Agents and
+    graphs depend only on this interface.
+    """
+
+    @property
+    def tool_names(self) -> list[str]: ...
+
+    def model_definitions(self) -> list[dict[str, Any]]: ...
+
+    def execute(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None = None,
+    ) -> ToolOutcome: ...
+
+
+class CompositeToolRunner:
+    """Several runners behind one interface, e.g. local knowledge tools + remote MCP tools."""
+
+    def __init__(self, runners: Sequence[ToolRunner], *, order: Sequence[str] = ()) -> None:
+        self._by_name: dict[str, ToolRunner] = {}
+        for runner in runners:
+            for name in runner.tool_names:
+                if name in self._by_name:
+                    raise ValueError(f"Duplicate tool name {name!r}")
+                self._by_name[name] = runner
+        rank = {name: i for i, name in enumerate(order)}
+        definitions = [d for r in runners for d in r.model_definitions()]
+        self._definitions = sorted(
+            definitions, key=lambda d: rank.get(d["function"]["name"], len(rank))
+        )
+
+    @property
+    def tool_names(self) -> list[str]:
+        return [d["function"]["name"] for d in self._definitions]
+
+    def model_definitions(self) -> list[dict[str, Any]]:
+        return list(self._definitions)
+
+    def execute(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None = None,
+    ) -> ToolOutcome:
+        runner = self._by_name.get(name)
+        if runner is None:
+            return refused_unknown_tool(name)
+        return runner.execute(name, args, user=user, request_id=request_id, thread_id=thread_id)
+
+
+def refused_unknown_tool(name: str) -> ToolOutcome:
+    """A tool this agent does not have. Traced and counted like any other refusal."""
+    return refused_call(name, "unknown_tool", f"There is no tool named {name!r}.")
+
+
+def refused_call(name: str, category: str, message: str) -> ToolOutcome:
+    """A tool call refused before it could run (unknown tool, malformed arguments...).
+
+    Still an `execute_tool` span and a counted tool error: every call the model
+    requested shows up in traces and metrics, whether or not anything ran.
+    """
+    content = json.dumps({"error": {"category": category, "message": message}})
+    outcome = ToolOutcome(name, OutcomeStatus.ERROR, content, 0.0, category)
+    with tracing.span(
+        f"execute_tool {name}", **{tracing.OPERATION: "execute_tool", tracing.TOOL_NAME: name}
+    ) as current:
+        current.set_attribute(tracing.STATUS, outcome.status.value)
+        tracing.mark_error(current, category)
+    record_tool_metrics(outcome)
+    return outcome
+
+
+def record_tool_metrics(outcome: ToolOutcome) -> None:
+    m = instruments()
+    m.tool_calls.add(1, {"tool": outcome.tool_name, "status": outcome.status.value})
+    m.tool_latency.record(outcome.latency_ms / 1000, {"tool": outcome.tool_name})
+    if outcome.error_category:
+        m.tool_errors.add(1, {"tool": outcome.tool_name, "category": outcome.error_category})
+
+
 def idempotency_key(user_id: str, request_id: str, tool_name: str, args: BaseModel) -> str:
     """Same user + same request + same tool + same validated arguments -> same key.
 
@@ -64,7 +168,17 @@ def idempotency_key(user_id: str, request_id: str, tool_name: str, args: BaseMod
 
 
 class ToolExecutor:
-    def __init__(self, tools: Sequence[ToolSpec[Any, Any]]) -> None:
+    def __init__(
+        self,
+        tools: Sequence[ToolSpec[Any, Any]],
+        *,
+        gateway: ActionGateway | None = None,
+        agent: AgentIdentity | None = None,
+    ) -> None:
+        # `agent` is the identity of the agent this executor serves (host side).
+        # A shared executor (an MCP server) passes the caller's agent per call.
+        self._gateway = gateway
+        self._agent = agent
         self._tools: dict[str, ToolSpec[Any, Any]] = {}
         for tool in tools:
             if tool.name in self._tools:
@@ -81,8 +195,48 @@ class ToolExecutor:
     def model_definitions(self) -> list[dict[str, Any]]:
         return [tool.model_definition() for tool in self._tools.values()]
 
+    @property
+    def governed(self) -> bool:
+        return self._gateway is not None
+
     def execute(
-        self, name: str, args: dict[str, Any], *, user: UserContext, request_id: str
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None = None,
+        agent: AgentIdentity | None = None,
+    ) -> ToolOutcome:
+        acting = agent or self._agent
+        with tracing.span(
+            f"execute_tool {name}",
+            **{
+                tracing.OPERATION: "execute_tool",
+                tracing.TOOL_NAME: name,
+                tracing.AGENT_NAME: acting.agent_id if acting else None,
+            },
+        ) as current:
+            outcome = self._execute(
+                name, args, user=user, request_id=request_id, thread_id=thread_id, agent=agent
+            )
+            current.set_attribute(tracing.STATUS, outcome.status.value)
+            if outcome.error_category:
+                tracing.mark_error(current, outcome.error_category)
+        # Counted here, where the tool actually runs (on the MCP server for remote tools).
+        record_tool_metrics(outcome)
+        return outcome
+
+    def _execute(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None,
+        agent: AgentIdentity | None,
     ) -> ToolOutcome:
         started = time.perf_counter()
 
@@ -102,15 +256,83 @@ class ToolExecutor:
         except ValidationError as exc:
             return error("invalid_arguments", _describe_validation_error(exc))
 
+        if self._gateway is None:
+            return self._run(spec, parsed, user, request_id, thread_id, error, elapsed)
+
+        try:
+            authorization = self._gateway.authorize(
+                tool=name,
+                access=spec.access,
+                args=parsed.model_dump(mode="json"),
+                user=user,
+                agent=agent or self._agent,
+                request_id=request_id,
+                thread_id=thread_id,
+            )
+        except StoreUnavailableError:
+            # M11: approval evidence could not be read. Fail closed: nothing runs.
+            logger.warning(
+                "Tool %s: authorization store unavailable (request_id=%s)", name, request_id
+            )
+            return error(
+                "unavailable",
+                "A system this action needs is temporarily unavailable, so it was not "
+                "completed. Tell the user to try again in a few minutes.",
+            )
+        match authorization.decision.decision:
+            case Decision.DENY:
+                reasons = ", ".join(authorization.decision.reasons)
+                outcome = error("policy_denied", f"This action is not allowed ({reasons}).")
+            case Decision.REQUIRE_APPROVAL:
+                outcome = error(
+                    "approval_required",
+                    "This action needs human approval before it can run. It was not performed.",
+                )
+            case _:
+                outcome = self._run(spec, parsed, user, request_id, thread_id, error, elapsed)
+        self._gateway.record_outcome(
+            authorization,
+            outcome=outcome.error_category or "ok",
+            latency_ms=outcome.latency_ms,
+        )
+        return outcome
+
+    def _run(
+        self,
+        spec: ToolSpec[Any, Any],
+        parsed: BaseModel,
+        user: UserContext,
+        request_id: str,
+        thread_id: str | None,
+        error: Callable[[str, str], ToolOutcome],
+        elapsed: Callable[[], float],
+    ) -> ToolOutcome:
+        name = spec.name
         key = None
         if spec.access is ToolAccess.WRITE:
             key = idempotency_key(user.employee_id, request_id, name, parsed)
-        context = ToolCallContext(user=user, request_id=request_id, idempotency_key=key)
+        context = ToolCallContext(
+            user=user, request_id=request_id, idempotency_key=key, thread_id=thread_id
+        )
 
         try:
-            output = spec.handler(parsed, context)
+            with tracing.span("tool.handler", **{tracing.TOOL_NAME: name}):
+                if faults.active("tool_error", name):
+                    raise faults.InjectedFaultError(f"injected tool_error for {name}")
+                output = spec.handler(parsed, context)
         except ToolError as exc:
             return error(exc.category, str(exc))
+        except StoreUnavailableError as exc:
+            # M11: a backing store is down. Not a bug, and retrying a write here is not
+            # safe; the model tells the user, who can retry (idempotently) later.
+            logger.warning(
+                "Tool %s: %s store unavailable (request_id=%s)", name, exc.store, request_id
+            )
+            return error(
+                "unavailable",
+                "A system this action needs is temporarily unavailable, so it was not "
+                "completed. Tell the user to try again in a few minutes.",
+            )
         except Exception:
             logger.exception("Tool %s failed (request_id=%s)", name, request_id)
             return error("internal_error", "The tool failed unexpectedly. Try again later.")

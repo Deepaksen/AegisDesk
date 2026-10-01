@@ -1,0 +1,29 @@
+flowchart TB
+  subgraph CP["GenX control plane"]
+    direction LR
+    portal["Developer portal<br/><small>templates · onboarding</small>"] ~~~ reg["Registries<br/><small>Lyzr · API hub · Credo</small>"] ~~~ pol["Policy and config<br/><small>packs · prompts · budgets</small>"] ~~~ rel["Release<br/><small>CI/CD · GitOps</small>"]
+  end
+  subgraph UC["Use-case workloads"]
+    direction LR
+    u1["AegisDesk"] ~~~ u2["HR onboarding agent"] ~~~ u3["Finance close agent"]
+  end
+  subgraph SVC["Shared services per cell"]
+    direction LR
+    mg["Model gateway"] ~~~ ctx["Context · memory<br/>RAG"] ~~~ gov["Policy gateway<br/>audit"] ~~~ wf["Workflow<br/>workers"]
+  end
+  subgraph OPS["Operate"]
+    direction LR
+    ar["Arize"] ~~~ fin["FinOps"] ~~~ sec["Zscaler · Astrix<br/>Veza"] ~~~ rb["Rubrik"]
+  end
+  CP -- "register · configure · deploy" --> UC
+  UC -- "use through the GenX SDK" --> SVC
+  SVC -- "telemetry · costs · actions" --> OPS
+  class portal,pol,rel,mg,ctx,gov,wf core
+  class reg,ar,fin,sec,rb vendor
+  class u1,u2,u3 gov
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

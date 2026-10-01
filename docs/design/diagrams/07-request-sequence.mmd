@@ -1,0 +1,27 @@
+sequenceDiagram
+  autonumber
+  actor U as Employee
+  participant A as API + Runtime
+  participant G as Supervisor graph
+  participant M as Model (guarded)
+  participant X as Executor · Gateway · Policy
+  participant L as Audit log
+  participant T as Tool (local / MCP)
+  U->>A: POST message (identity header, Idempotency-Key, SSE)
+  A->>A: authenticate · idempotency begin · http span
+  A->>G: run turn (checkpointed thread)
+  G->>M: route → RoutingPlan
+  M-->>G: service_desk: "create a ticket"
+  G->>M: specialist call (its tools only)
+  M-->>G: create_ticket(args)
+  G->>X: execute(tool, args, UserContext)
+  X->>X: schema check · policy (ALLOW)
+  X->>L: DECISION event (before acting)
+  X->>T: run (idempotency key)
+  T-->>X: INC-1008
+  X->>L: OUTCOME event
+  X-->>G: tool result
+  G->>M: specialist call
+  M-->>G: final answer
+  G-->>A: AgentRun (trajectory, trace_id)
+  A-->>U: SSE activity… then result

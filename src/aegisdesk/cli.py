@@ -7,12 +7,21 @@
     aegisdesk agent --as E1004 "What laptop is assigned to me?"
     aegisdesk agent --as E1004               interactive session (LangGraph, persisted)
     aegisdesk agent --as E1004 --thread T1 "..."   continue a stored thread, even after restart
+    aegisdesk agent --as E1004 --engine graph "..." the single Service Desk agent (M2/M3)
     aegisdesk agent --as E1004 --engine loop "..." the Milestone 1 hand-written loop
+    aegisdesk agent --as E1004 --tools mcp_inprocess "..."  enterprise tools over MCP (M5)
     aegisdesk thread T1 --as E1004           show a stored thread
     aegisdesk rag ingest                     build the knowledge-base index
     aegisdesk rag search "vpn drops" --as E1004    inspect retrieved chunks and scores
     aegisdesk ask "How do I configure VPN on macOS?" --as E1004   answer with citations
     aegisdesk eval rag                       retrieval evaluation (recall, MRR, access)
+    aegisdesk mcp serve                      run the read and action MCP servers (HTTP)
+    aegisdesk mcp tools                      MCP discovery: list each server's tools
+    aegisdesk policy check --as E1004 --agent knowledge --tool create_ticket
+    aegisdesk audit --user E1004             audit events (AUDIT_STORE=postgres to persist)
+    aegisdesk approvals list --as E1010      approvals waiting for a manager (Milestone 7)
+    aegisdesk approvals approve AP-0001 --as E1010 --comment "ok"   decide, then resume
+    aegisdesk db init                        migrate + checkpoint tables + seed (PostgreSQL)
 
 Every command prints the provider, model, prompt version, token usage and
 latency of each model call, because those are the facts later milestones will
@@ -23,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from collections.abc import Iterator, Sequence
@@ -32,27 +42,71 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import ValidationError
 
-from aegisdesk.agents.loop import AgentRun, ModelStep, ToolStep
+from aegisdesk.agents.loop import (
+    AgentRun,
+    AgentStep,
+    ModelStep,
+    RouteStep,
+    TrajectoryStep,
+)
 from aegisdesk.agents.service_desk import (
     DEFAULT_PROMPT_VERSION,
     build_service_desk_agent,
     build_service_desk_graph_agent,
 )
-from aegisdesk.config import PROJECT_ROOT, Settings, VectorStoreKind, get_settings
+from aegisdesk.agents.supervisor import build_supervisor_agent
+from aegisdesk.approvals.service import ApprovalError, ApprovalService
+from aegisdesk.config import (
+    PROJECT_ROOT,
+    DataStoreKind,
+    ModelProvider,
+    Settings,
+    ToolTransport,
+    VectorStoreKind,
+    get_settings,
+)
+from aegisdesk.domain.access import ApprovalRecord
 from aegisdesk.domain.repository import ServiceDeskRepository
+from aegisdesk.evals.golden import GoldenDataset
+from aegisdesk.evals.judge import Judge
+from aegisdesk.evals.report import Pricing, Report, comparison, summary
 from aegisdesk.evals.retrieval import RagDataset, evaluate_retrieval
-from aegisdesk.graphs.service_desk_graph import NODE_START, ThreadAccessError, step_from_entry
+from aegisdesk.evals.runner import CaseRun, EvalRunner, SystemConfig
+from aegisdesk.governance.factory import build_audit_log, build_gateway
+from aegisdesk.governance.policy import PolicyEngine, PolicyError, PolicyInput
+from aegisdesk.graphs.service_desk_graph import (
+    NODE_START,
+    ThreadAccessError,
+    ThreadedGraphAgent,
+    step_from_entry,
+)
+from aegisdesk.identity.agent import AgentIdentity
 from aegisdesk.identity.context import AuthenticationError, UserContext, authenticate
 from aegisdesk.llm.allowlist import ModelNotAllowedError
 from aegisdesk.llm.client import CallMetadata, LLMClient, StructuredOutputError
 from aegisdesk.llm.factory import ModelConfigurationError, build_chat_model
 from aegisdesk.llm.usage import TokenUsage
-from aegisdesk.persistence.checkpointer import sqlite_checkpointer
+from aegisdesk.mcp_servers.catalogue import McpServerName, build_servers
+from aegisdesk.mcp_servers.server import RISK_META_KEY
+from aegisdesk.observability import faults, langsmith, tracing
+from aegisdesk.observability.logging import configure_logging
+from aegisdesk.observability.redaction import pseudonym
+from aegisdesk.observability.setup import (
+    TelemetryExporter,
+    configure_telemetry,
+    tracer_provider,
+    tree_exporter,
+)
+from aegisdesk.observability.tree import render
+from aegisdesk.persistence.factory import build_repository, open_checkpointer, psycopg_url
 from aegisdesk.prompts.loader import PromptNotFoundError, load_prompt
 from aegisdesk.rag.answer import GroundedAnswerer
 from aegisdesk.rag.factory import build_embedder, build_retriever, build_store
 from aegisdesk.rag.ingestion.pipeline import ingest_directory
+from aegisdesk.runtime import AegisRuntime
 from aegisdesk.schemas.triage import TicketTriage
+from aegisdesk.tools.remote import McpGateway, McpTarget, ToolTransportError
+from aegisdesk.tools.transport import ToolFactory
 
 
 def _client(settings: Settings) -> LLMClient:
@@ -130,16 +184,31 @@ def cmd_repeat(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _format_step(step: ModelStep | ToolStep) -> str:
+def _format_step(step: TrajectoryStep) -> str:
+    if isinstance(step, RouteStep):
+        if step.error:
+            decision = f"routing failed ({step.error})"
+        elif step.out_of_scope:
+            decision = "out of scope"
+        else:
+            decision = ", ".join(f"{agent}: {instr!r}" for agent, instr in step.tasks)
+        return (
+            f"→ router  in={step.usage.input_tokens} out={step.usage.output_tokens} "
+            f"{step.latency_ms:.0f}ms -> {decision}"
+        )
+    if isinstance(step, AgentStep):
+        note = f" [{step.note}]" if step.note else ""
+        return f"← {step.agent} {step.status}{note}"
+    who = f"[{step.agent}] " if step.agent else ""
     if isinstance(step, ModelStep):
         wants = ", ".join(step.requested_tools) or "final answer"
         return (
-            f"  · step {step.step} model  in={step.usage.input_tokens} "
+            f"  · {who}step {step.step} model  in={step.usage.input_tokens} "
             f"out={step.usage.output_tokens} {step.latency_ms:.0f}ms -> {wants}"
         )
     detail = f" ({step.error_category})" if step.error_category else ""
     return (
-        f"  · step {step.step} tool   {step.tool_name}({json.dumps(step.args)}) "
+        f"  · {who}step {step.step} tool   {step.tool_name}({json.dumps(step.args)}) "
         f"{step.status.value}{detail} {step.latency_ms:.1f}ms"
     )
 
@@ -149,8 +218,14 @@ def _print_run(run: AgentRun, settings: Settings, *, quiet: bool, show_steps: bo
         for step in run.trajectory:
             print(_format_step(step))
     print(f"Assistant: {run.answer}")
+    if run.pending_approvals:
+        steps = ", ".join(
+            f"{p['approval_id']} ({p['step']}: {p['approver']})" for p in run.pending_approvals
+        )
+        print(f"⏸ Waiting for approval: {steps}. Thread {run.thread_id} will resume on decision.")
     if not quiet:
         thread = f" thread_id={run.thread_id}" if run.thread_id else ""
+        thread += f" trace_id={run.trace_id}" if run.trace_id else ""
         print(
             f"  [{run.agent_name}@{run.agent_version} prompt={run.prompt_name}@"
             f"{run.prompt_version} model={settings.model_provider.value}/{settings.model_name} "
@@ -192,9 +267,10 @@ def _read_turns(prompt: str) -> Iterator[str]:
 
 
 def _login(settings: Settings, employee_id: str) -> tuple[ServiceDeskRepository, UserContext]:
-    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    repository = build_repository(settings)
     # Simulated login. The identity is fixed here, before the model is involved.
-    return repository, authenticate(repository, employee_id)
+    with tracing.span("aegisdesk.authenticate", **{tracing.USER: pseudonym(employee_id)}):
+        return repository, authenticate(repository, employee_id)
 
 
 def _run_loop_engine(
@@ -225,15 +301,32 @@ def _run_graph_engine(
     args: argparse.Namespace,
 ) -> int:
     thread_id = args.thread or str(uuid.uuid4())
-    with sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer:
-        agent = build_service_desk_graph_agent(
-            settings, repository, checkpointer=checkpointer, prompt_version=args.prompt_version
-        )
+    if args.tools is not None:
+        settings = settings.model_copy(update={"tool_transport": ToolTransport(args.tools)})
+    if args.engine != "multi" and settings.tool_transport is not ToolTransport.LOCAL:
+        print("Note: MCP tool transport applies to --engine multi; using local tools.")
+        settings = settings.model_copy(update={"tool_transport": ToolTransport.LOCAL})
+    with (
+        open_checkpointer(settings) as checkpointer,
+        ToolFactory.from_settings(settings, repository) as tool_factory,
+    ):
+        agent: ThreadedGraphAgent
+        if args.engine == "multi":
+            if not args.quiet:
+                print(f"Tools: {settings.tool_transport.value}")
+            agent = build_supervisor_agent(
+                settings, repository, checkpointer=checkpointer, tool_factory=tool_factory
+            )
+        else:
+            agent = build_service_desk_graph_agent(
+                settings, repository, checkpointer=checkpointer, prompt_version=args.prompt_version
+            )
         printer = None if args.quiet else _StepPrinter()
 
         def turn(text: str) -> None:
             run = agent.run(text, user=user, thread_id=thread_id, on_update=printer)
             _print_run(run, settings, quiet=args.quiet, show_steps=False)
+            _print_trace(run.trace_id)
 
         if args.message:
             turn(args.message)
@@ -264,7 +357,7 @@ def cmd_agent(settings: Settings, args: argparse.Namespace) -> int:
 def cmd_thread(settings: Settings, args: argparse.Namespace) -> int:
     try:
         repository, user = _login(settings, args.employee_id)
-        with sqlite_checkpointer(settings.checkpoint_db_path) as checkpointer:
+        with open_checkpointer(settings) as checkpointer:
             agent = build_service_desk_graph_agent(settings, repository, checkpointer=checkpointer)
             messages = agent.history(args.thread_id, user)
     except AuthenticationError as exc:
@@ -367,6 +460,8 @@ def cmd_ask(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_eval(settings: Settings, args: argparse.Namespace) -> int:
+    if args.eval_command == "golden":
+        return _eval_golden(settings, args)
     dataset = RagDataset.load(args.dataset)
     repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
     report = evaluate_retrieval(dataset, build_retriever(settings), repository)
@@ -433,11 +528,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true", help="print only the answer")
     p.add_argument(
         "--engine",
-        choices=["graph", "loop"],
-        default="graph",
-        help="graph: LangGraph with persisted threads (default); loop: the M1 hand-written loop",
+        choices=["multi", "graph", "loop"],
+        default="multi",
+        help=(
+            "multi: supervisor + specialist agents (default); graph: the single Service Desk "
+            "agent (M2/M3); loop: the M1 hand-written loop"
+        ),
     )
     p.add_argument("--thread", help="thread ID to continue (graph engine); a new one if omitted")
+    p.add_argument(
+        "--trace", action="store_true", help="print this run's trace as a span tree (Milestone 8)"
+    )
+    p.add_argument(
+        "--tools",
+        choices=[t.value for t in ToolTransport],
+        default=None,
+        help="where enterprise tools run (default TOOL_TRANSPORT); multi engine only",
+    )
 
     rag = sub.add_parser("rag", help="knowledge base: ingest documents, inspect retrieval")
     rag_sub = rag.add_subparsers(dest="rag_command", required=True)
@@ -455,14 +562,419 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval", help="run an evaluation suite")
     ev_sub = ev.add_subparsers(dest="eval_command", required=True)
+    p = ev_sub.add_parser("golden", help="golden dataset: agents, tools, policy, RAG (M9)")
+    p.add_argument("--dataset", type=Path, default=PROJECT_ROOT / "evals/datasets/golden_v1.yaml")
+    p.add_argument("--config", choices=[c.value for c in SystemConfig], default="multi")
+    p.add_argument("--compare", choices=[c.value for c in SystemConfig], help="second config")
+    p.add_argument("--judge", action="store_true", help="LLM judge (EVAL_JUDGE_PROVIDER/MODEL)")
+    p.add_argument("--quality-gate", action="store_true", help="enforce the spec's targets")
+    p.add_argument("--baseline", type=Path, default=None, help="fail if metrics drop below it")
+    p.add_argument("--write-baseline", type=Path, default=None, help="store this run as baseline")
+    p.add_argument("--out", type=Path, default=None, help="results JSON path")
     p = ev_sub.add_parser("rag", help="deterministic retrieval evaluation")
     p.add_argument("--dataset", type=Path, default=PROJECT_ROOT / "evals/datasets/rag_v1.yaml")
     p.add_argument("--min-hit-rate", type=float, default=None, help="fail if hit rate is lower")
+
+    mcp = sub.add_parser("mcp", help="MCP servers for the enterprise tools (Milestone 5)")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
+    p = mcp_sub.add_parser("serve", help="serve the read and action MCP servers over HTTP")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
+    p = mcp_sub.add_parser("tools", help="discover the tools each MCP server offers")
+    p.add_argument(
+        "--remote",
+        action="store_true",
+        help="query the HTTP servers (MCP_READ_URL/MCP_ACTION_URL) instead of in-process",
+    )
+
+    pol = sub.add_parser("policy", help="governance policy (Milestone 6)")
+    pol_sub = pol.add_subparsers(dest="policy_command", required=True)
+    p = pol_sub.add_parser("check", help="ask the policy engine for one decision")
+    p.add_argument("--as", dest="employee_id", required=True, help="employee ID")
+    p.add_argument("--agent", required=True, help="agent id, e.g. knowledge, access")
+    p.add_argument("--tool", required=True)
+    p.add_argument("--environment", help="where the call is enforced (default AEGIS_ENV)")
+    p.add_argument("--agent-environment", help="the agent's claimed environment")
+
+    p = sub.add_parser("audit", help="list audit events (use AUDIT_STORE=postgres)")
+    p.add_argument("--request", help="only this request ID")
+    p.add_argument("--user", help="only this employee ID")
+    p.add_argument("--limit", type=int, default=50)
+
+    ap = sub.add_parser("approvals", help="approve or reject access requests (Milestone 7)")
+    ap_sub = ap.add_subparsers(dest="approvals_command", required=True)
+    p = ap_sub.add_parser("list", help="approvals waiting for you")
+    p.add_argument("--as", dest="employee_id", required=True, help="approver's employee ID")
+    p = ap_sub.add_parser("show", help="one approval")
+    p.add_argument("approval_id")
+    p.add_argument("--as", dest="employee_id", required=True)
+    for verb in ("approve", "reject"):
+        p = ap_sub.add_parser(verb, help=f"{verb} an approval step, then resume the workflow")
+        p.add_argument("approval_id")
+        p.add_argument("--as", dest="employee_id", required=True, help="approver's employee ID")
+        p.add_argument("--comment", default=None)
+    p = ap_sub.add_parser(
+        "reconcile", help="finish approved requests that were never provisioned (IT admin, M11)"
+    )
+    p.add_argument("--as", dest="employee_id", required=True, help="an IT admin's employee ID")
+
+    api = sub.add_parser("api", help="HTTP API (Milestone 10)")
+    api_sub = api.add_subparsers(dest="api_command", required=True)
+    p = api_sub.add_parser("serve", help="serve the API (OpenAPI docs at /docs)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+
+    db = sub.add_parser("db", help="database setup (PostgreSQL)")
+    db_sub = db.add_subparsers(dest="db_command", required=True)
+    db_sub.add_parser("init", help="migrate, create checkpoint tables, load seed rows")
+    db_sub.add_parser("seed", help="load seed rows that are missing")
+
+    sub.add_parser("telemetry", help="show where traces, metrics and logs go (Milestone 8)")
 
     p = sub.add_parser("thread", help="show a stored conversation thread")
     p.add_argument("thread_id")
     p.add_argument("--as", dest="employee_id", required=True, help="employee ID to sign in as")
     return parser
+
+
+def cmd_mcp(settings: Settings, args: argparse.Namespace) -> int:
+    if args.mcp_command == "serve":
+        # The servers share the configured stores (DATA_STORE=postgres in the compose
+        # stack) and verify recorded approvals before HIGH-risk provisioning.
+        repository = build_repository(settings)
+        if settings.mcp_token_secret is None:
+            print("Configuration error: set MCP_TOKEN_SECRET (32+ characters)", file=sys.stderr)
+            return 2
+        import uvicorn
+
+        from aegisdesk.mcp_servers.http import build_http_app
+
+        app = build_http_app(
+            repository,
+            settings.mcp_token_secret.get_secret_value(),
+            gateway=build_gateway(settings, access_store=repository.access_store),
+            host=args.host,
+        )
+        print(f"MCP servers: http://{args.host}:{args.port}/read/mcp, /action/mcp")
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        return 0
+
+    # Discovery needs no token: listing tools reveals no user data.
+    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    targets: dict[McpServerName, McpTarget]
+    if args.remote:
+        targets = {
+            McpServerName.READ: settings.mcp_read_url,
+            McpServerName.ACTION: settings.mcp_action_url,
+        }
+    else:
+        targets = dict(
+            build_servers(repository, "discovery-only-" + "x" * 32, gateway=build_gateway(settings))
+        )
+    with McpGateway(targets, timeout_seconds=settings.mcp_timeout_seconds) as gateway:
+        for server in McpServerName:
+            try:
+                tools = gateway.list_tools(server)
+            except ToolTransportError as exc:
+                print(f"[{server}] {exc}", file=sys.stderr)
+                return 1
+            print(f"[{server}] audience={server.audience}")
+            for tool in tools:
+                meta = tool.meta or {}
+                hints = tool.annotations
+                flags = [
+                    "read-only" if hints and hints.read_only_hint else "write",
+                    "idempotent" if hints and hints.idempotent_hint else "non-idempotent",
+                ]
+                print(f"  {tool.name:<26} risk={meta.get(RISK_META_KEY)} {', '.join(flags)}")
+    return 0
+
+
+def cmd_policy(settings: Settings, args: argparse.Namespace) -> int:
+    """Ask the policy engine directly, without any model or tool involved."""
+    repository = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    user = authenticate(repository, args.employee_id)
+    engine = PolicyEngine.from_file(settings.policy_path)
+    environment = args.environment or settings.aegis_env.value
+    agent = AgentIdentity(
+        agent_id=args.agent,
+        agent_version="cli",
+        agent_type="specialist",
+        environment=args.agent_environment or environment,
+    )
+    decision = engine.evaluate(
+        PolicyInput(tool=args.tool, user=user, agent=agent, environment=environment)
+    )
+    risk = decision.risk.value if decision.risk else "unclassified"
+    print(
+        f"{decision.decision.value.upper()}  tool={args.tool} agent={args.agent} "
+        f"user={user.employee_id} environment={environment} risk={risk}"
+    )
+    for reason in decision.reasons:
+        print(f"  reason: {reason}")
+    print(f"  policy: {decision.policy_version} ({settings.policy_path.name})")
+    return 0 if decision.allowed else 1
+
+
+def cmd_audit(settings: Settings, args: argparse.Namespace) -> int:
+    audit = build_audit_log(settings)
+    events = audit.query(request_id=args.request, user_id=args.user, limit=args.limit)
+    if not events:
+        store = settings.audit_store.value
+        print(f"No audit events (AUDIT_STORE={store}; the memory store is per process).")
+        return 0
+    for e in events:
+        agent = f"{e.agent_id}@{e.agent_version}" if e.agent_id else "-"
+        reasons = f" reasons={','.join(e.policy_reasons)}" if e.policy_reasons else ""
+        resource = f" resource={json.dumps(e.resource)}" if e.resource else ""
+        if e.approval_id:
+            resource += f" approval={e.approval_id} approver={e.approver_id}"
+        print(
+            f"{e.occurred_at:%Y-%m-%d %H:%M:%S} {e.phase.value:<8} {e.tool:<24} "
+            f"user={e.user_id} agent={agent} env={e.environment} "
+            f"decision={e.policy_decision} outcome={e.outcome}{reasons}{resource} "
+            f"request_id={e.request_id}" + (f" thread_id={e.thread_id}" if e.thread_id else "")
+        )
+    return 0
+
+
+def _golden_report(
+    settings: Settings, dataset: GoldenDataset, config: SystemConfig, judge: bool
+) -> Report:
+    model_label = f"{settings.model_provider.value}/{settings.model_name}"
+    runner = EvalRunner(
+        settings,
+        build_retriever(settings),
+        today=dataset.today,
+        model_factory=lambda: build_chat_model(settings),
+        model_label=model_label,
+    )
+    runs = []
+    for case in dataset.cases:
+        runs.append(runner.run(case, config))
+    report = Report.build(
+        dataset.name,
+        dataset.version,
+        config.value,
+        model_label,
+        runs,
+        Pricing.load(PROJECT_ROOT / "config" / "pricing.yaml"),
+    )
+    if judge:
+        report.judge = _judge(settings, runs)
+    return report
+
+
+def _judge(settings: Settings, runs: list[CaseRun]) -> dict[str, Any]:
+    provider = os.environ.get("EVAL_JUDGE_PROVIDER")
+    name = os.environ.get("EVAL_JUDGE_MODEL")
+    if not provider or not name:
+        return {"model": None, "status": "not run: set EVAL_JUDGE_PROVIDER and EVAL_JUDGE_MODEL"}
+    judge_settings = settings.model_copy(
+        update={"model_provider": ModelProvider(provider), "model_name": name}
+    )
+    judge = Judge(
+        build_chat_model(judge_settings),
+        load_prompt(settings.prompts_dir, "judge", "v1"),
+        provider=ModelProvider(provider),
+        model_name=name,
+    )
+    return judge.grade_all(runs)
+
+
+def _eval_golden(settings: Settings, args: argparse.Namespace) -> int:
+    dataset = GoldenDataset.load(args.dataset)
+    report = _golden_report(settings, dataset, SystemConfig(args.config), args.judge)
+    print(summary(report))
+    out = args.out or (
+        PROJECT_ROOT
+        / "evals"
+        / "results"
+        / f"{dataset.name}-v{dataset.version}-{report.config}-{settings.model_name}.json"
+    )
+    report.write(out)
+    print(f"  results: {out}")
+
+    if args.compare:
+        other = _golden_report(settings, dataset, SystemConfig(args.compare), False)
+        other.write(out.with_name(out.stem.replace(report.config, other.config) + ".json"))
+        print()
+        print(comparison(report, other))
+
+    failures = [f"safety: {f}" for f in report.safety_failures()]
+    if args.quality_gate:
+        failures += [f"quality: {f}" for f in report.quality_failures()]
+    baseline = args.baseline
+    if baseline is not None and not baseline.exists():
+        failures.append(f"regression: baseline {baseline} not found")
+    elif baseline is not None:
+        failures += [
+            f"regression: {f}"
+            for f in report.regression_failures(json.loads(baseline.read_text(encoding="utf-8")))
+        ]
+    if args.write_baseline is not None:
+        report.write(args.write_baseline)
+        print(f"  baseline written: {args.write_baseline}")
+    for failure in failures:
+        print(f"  GATE FAILED {failure}")
+    if not failures:
+        print(
+            "  gates passed"
+            + (" (incl. quality)" if args.quality_gate else " (safety, regression)")
+        )
+    return 1 if failures else 0
+
+
+def _print_trace(trace_id: str | None) -> None:
+    """With --trace (TELEMETRY_EXPORTER=tree): the run's spans as a tree."""
+    exporter = tree_exporter()
+    if exporter is None or trace_id is None:
+        return
+    tracer_provider().force_flush()
+    print(render(exporter.spans, int(trace_id, 16)))
+
+
+def _approval_service(settings: Settings, repository: ServiceDeskRepository) -> ApprovalService:
+    return ApprovalService(
+        repository.access_store, build_audit_log(settings), environment=settings.aegis_env.value
+    )
+
+
+def cmd_approvals(settings: Settings, args: argparse.Namespace) -> int:
+    """The manager's side of the approval workflow (a UI arrives in Milestone 10)."""
+    repository, approver = _login(settings, args.employee_id)
+    service = _approval_service(settings, repository)
+    memory_note = (
+        "  (DATA_STORE=memory: approvals exist only inside one process; "
+        "use DATA_STORE=postgres to decide from another process.)"
+    )
+    if args.approvals_command == "reconcile":
+        return _reconcile(settings, repository, approver)
+    try:
+        if args.approvals_command == "list":
+            pending = service.list_pending_for(approver)
+            if not pending:
+                print(f"No approvals waiting for {approver.employee_id}.")
+                if settings.data_store is DataStoreKind.MEMORY:
+                    print(memory_note)
+            for a in pending:
+                print(_format_approval(a, repository))
+            return 0
+        if args.approvals_command == "show":
+            print(_format_approval(service.get(args.approval_id, approver), repository))
+            return 0
+
+        # Decide, then resume the paused workflow: the same path the API uses.
+        with AegisRuntime.open(settings, repository=repository) as runtime:
+            decision = runtime.decide(
+                approver,
+                args.approval_id,
+                approve=args.approvals_command == "approve",
+                comment=args.comment,
+            )
+    except ApprovalError as exc:
+        print(f"Refused ({exc.category}): {exc}", file=sys.stderr)
+        return 2
+    result = decision.result
+    print(_format_approval(result.approval, repository))
+    if not result.changed:
+        print("  (already recorded; nothing changed)")
+    if decision.note:
+        print(f"  {decision.note}")
+    if decision.resumed is not None:
+        print(f"Resumed thread {decision.resumed.thread_id}:")
+        print(f"Assistant: {decision.resumed.answer}")
+        _print_trace(decision.resumed.trace_id)
+    return 0
+
+
+def _reconcile(settings: Settings, repository: ServiceDeskRepository, operator: UserContext) -> int:
+    if "it_admin" not in operator.roles:
+        print("Refused: reconciling provisioning needs the it_admin role.", file=sys.stderr)
+        return 2
+    with AegisRuntime.open(settings, repository=repository) as runtime:
+        results = runtime.reconcile()
+    if not results:
+        print("Nothing to reconcile: every approved request is provisioned.")
+    for r in results:
+        print(f"{r.request_id}  {r.action}" + (f"  {r.detail}" if r.detail else ""))
+    return 1 if any(r.action == "failed" for r in results) else 0
+
+
+def _format_approval(a: ApprovalRecord, repository: ServiceDeskRepository) -> str:
+    requester = repository.get_employee(a.requester_id)
+    app = repository.get_application(a.application_id)
+    who = a.approver_id or f"any {a.approver_role}"
+    decided = (f" by {a.decided_by} at {a.decided_at:%Y-%m-%d %H:%M}" if a.decided_at else "") + (
+        f' "{a.comment}"' if a.comment else ""
+    )
+    return (
+        f"{a.approval_id}  {a.status.value:<8} {a.step.value:<10} {a.access_request_id} "
+        f"{app.name if app else a.application_id} for {requester.name if requester else ''} "
+        f"({a.requester_id})  approver={who}  expires={a.expires_at:%Y-%m-%d %H:%M}{decided}"
+    )
+
+
+def cmd_db(settings: Settings, args: argparse.Namespace) -> int:
+    """Create schemas (Alembic + LangGraph checkpointer) and load seed rows. Never at startup."""
+    from aegisdesk.domain.access_store_pg import PgAccessStore
+
+    if args.db_command == "init":
+        from alembic import command
+        from alembic.config import Config
+
+        command.upgrade(Config(str(PROJECT_ROOT / "alembic.ini")), "head")
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        with PostgresSaver.from_conn_string(psycopg_url(settings.database_url)) as saver:
+            saver.setup()
+        print("Schema up to date (Alembic head + LangGraph checkpoint tables).")
+    seed = ServiceDeskRepository.from_seed(settings.seed_data_dir)
+    requests = [r for e in seed.list_employee_ids() for r in seed.access_requests_for(e)]
+    access = [a for e in seed.list_employee_ids() for a in seed.access_for(e)]
+    inserted = PgAccessStore(settings.database_url).seed(access, requests)
+    print(f"Seed rows inserted: {inserted} (existing rows are never overwritten).")
+    return 0
+
+
+def _configure_observability(settings: Settings, args: argparse.Namespace) -> Settings:
+    if getattr(args, "trace", False):
+        settings = settings.model_copy(update={"telemetry_exporter": TelemetryExporter.TREE})
+    service = "aegisdesk-mcp" if args.command == "mcp" else "aegisdesk-cli"
+    configure_logging(fmt=settings.log_format.value, level=settings.log_level)
+    configure_telemetry(
+        service_name=service,
+        exporter=settings.telemetry_exporter,
+        environment=settings.aegis_env.value,
+    )
+    return settings
+
+
+def cmd_api(settings: Settings, args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from aegisdesk.api.app import create_app
+
+    print(f"AegisDesk API: http://{args.host}:{args.port}/docs")
+    uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="info")
+    return 0
+
+
+def cmd_telemetry(settings: Settings, _args: argparse.Namespace) -> int:
+    """Where telemetry goes, without printing any secret."""
+    report = {
+        "service": "aegisdesk-cli",
+        "exporter": settings.telemetry_exporter.value,
+        "otlp_endpoint": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "(SDK default)"),
+        "otlp_headers": "set" if os.environ.get("OTEL_EXPORTER_OTLP_HEADERS") else "not set",
+        "log_format": settings.log_format.value,
+        "log_level": settings.log_level,
+        "langsmith": "on" if langsmith.enabled() else "off",
+        "langsmith_project": os.environ.get("LANGSMITH_PROJECT", "(default)"),
+        "faults": os.environ.get(faults.ENV) or "none",
+    }
+    print(json.dumps(report, indent=2))
+    return 0
 
 
 COMMANDS = {
@@ -475,13 +987,31 @@ COMMANDS = {
     "rag": cmd_rag,
     "ask": cmd_ask,
     "eval": cmd_eval,
+    "mcp": cmd_mcp,
+    "policy": cmd_policy,
+    "audit": cmd_audit,
+    "approvals": cmd_approvals,
+    "telemetry": cmd_telemetry,
+    "db": cmd_db,
+    "api": cmd_api,
 }
+
+
+def _one_shot(args: argparse.Namespace) -> bool:
+    if args.command == "agent":
+        return bool(args.message)  # interactive sessions: one trace per turn instead
+    return args.command in {"approvals", "ask", "thread"}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return COMMANDS[args.command](get_settings(), args)
+        settings = _configure_observability(get_settings(), args)
+        if _one_shot(args):
+            # One trace for the whole command: authentication, the run, the resume.
+            with tracing.span(f"aegisdesk.cli {args.command}"):
+                return COMMANDS[args.command](settings, args)
+        return COMMANDS[args.command](settings, args)
     except AuthenticationError as exc:
         print(f"Login failed: {exc}", file=sys.stderr)
         return 2
@@ -490,6 +1020,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ModelNotAllowedError,
         ModelConfigurationError,
         PromptNotFoundError,
+        PolicyError,
     ) as exc:
         # Configuration mistakes are reported plainly; unexpected errors keep their traceback.
         print(f"Configuration error: {exc}", file=sys.stderr)

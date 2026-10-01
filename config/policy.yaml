@@ -1,0 +1,114 @@
+# AegisDesk tool-call policy (Milestone 6).
+#
+# This file is the authority on which agent may call which tool, how risky
+# each tool is, and what each environment allows. It is evaluated by
+# deterministic code (src/aegisdesk/governance/policy.py) on every tool call,
+# locally and on the MCP servers. Nothing a model says can change it.
+#
+# Decision order: collect every deny reason; any deny wins. Otherwise HIGH
+# risk requires human approval unless the gateway found recorded approval
+# for this exact call (Milestone 7), and everything else is allowed.
+# A tool missing from `tools` is denied (unclassified).
+
+version: 1
+
+# Risk classification (spec section 11). This is the classification that
+# counts: if a tool's code declares a lower risk, the policy value wins.
+tools:
+  # Knowledge base (local to the agents)
+  search_knowledge_base: {risk: low}
+  retrieve_document: {risk: low}
+  # Control signal to the supervisor
+  request_handoff: {risk: low}
+  # aegisdesk-read
+  get_employee_profile: {risk: low}
+  get_my_assets: {risk: low}
+  list_my_tickets: {risk: low}
+  get_ticket: {risk: low}
+  list_my_access: {risk: low}
+  get_application: {risk: low}
+  check_access_eligibility: {risk: low}
+  # aegisdesk-action
+  create_ticket: {risk: medium}
+  add_ticket_comment: {risk: medium}
+  create_access_request: {risk: medium}
+  # Grants access. HIGH: allowed only with recorded human approval (or an
+  # auto-approved standard application), which the gateway looks up itself.
+  provision_access: {risk: high}
+
+# MEDIUM: automatic only for explicitly authorized operations.
+authorized_writes:
+  - create_ticket
+  - add_ticket_comment
+  - create_access_request
+
+# Never available to a conversational agent, whatever else is configured.
+forbidden_tools:
+  - direct_grant_production_admin
+  - grant_access
+  - delete_audit_events
+
+# Agent-to-tool authorization, keyed by agent_id.
+agents:
+  knowledge:
+    - search_knowledge_base
+    - retrieve_document
+    - request_handoff
+  service_desk:
+    - get_my_assets
+    - list_my_tickets
+    - get_ticket
+    - create_ticket
+    - add_ticket_comment
+    - search_knowledge_base
+    - request_handoff
+  access:
+    - get_employee_profile
+    - list_my_access
+    - get_application
+    - check_access_eligibility
+    - create_access_request
+    - request_handoff
+  # The approval workflow (deterministic code, not a model). The only identity
+  # that may provision, and only after approval.
+  access_workflow:
+    - provision_access
+  # The single Service Desk agent (--engine graph / loop), kept for comparison.
+  service_desk_single:
+    - get_my_assets
+    - list_my_tickets
+    - get_ticket
+    - create_ticket
+    - add_ticket_comment
+    - search_knowledge_base
+    - retrieve_document
+
+# Environment restrictions. Writes in development and test go to the
+# simulated (seeded, in-memory) systems. Production allows only tools whose
+# integration has been approved; writes are not approved yet.
+environments:
+  development:
+    allowed_tools: all
+  test:
+    allowed_tools: all
+  production:
+    allowed_tools:
+      - search_knowledge_base
+      - retrieve_document
+      - request_handoff
+      - get_employee_profile
+      - get_my_assets
+      - list_my_tickets
+      - get_ticket
+      - list_my_access
+      - get_application
+      - check_access_eligibility
+
+# Tools that need a user role, e.g. approving requests (Milestone 7).
+required_roles: {}
+
+# Per-request limits (Milestone 9, found by the adversarial evaluation): a
+# manipulated model could otherwise make many individually-authorized writes in
+# one request (e.g. six tickets). Counted by the gateway from the audit trail.
+limits:
+  max_writes_per_request: 3

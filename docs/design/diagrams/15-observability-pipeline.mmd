@@ -1,0 +1,16 @@
+flowchart TB
+  subgraph app["Processes"]
+    direction LR
+    sp["Spans<br/><small>http · request · chat · agent ·<br/>tool · policy · mcp · rag · approval</small>"]
+    me["Metrics (spec §24)"]
+    lo["JSON logs<br/><small>trace_id · request_id · thread_id</small>"]
+    au["Audit events<br/><small>trace_id column</small>"]
+  end
+  sp --> red["RedactingSpanProcessor<br/><small>allowlisted keys · secret scrubbing · user hash</small>"]
+  red -->|"OTLP/HTTP"| col["OTel Collector<br/><small>second redaction pass</small>"]
+  col --> tem["Tempo"]
+  col --> pro["Prometheus"]
+  me -->|"/metrics scrape or OTLP"| pro
+  tem --> gra["Grafana dashboard"]
+  pro --> gra
+  red -.->|"optional"| lsm["LangSmith (redacted)"]

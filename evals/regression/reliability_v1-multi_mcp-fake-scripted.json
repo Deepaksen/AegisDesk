@@ -1,0 +1,167 @@
+{
+  "dataset": "reliability",
+  "dataset_version": 1,
+  "config": "multi_mcp",
+  "model": "fake/fake-scripted",
+  "metrics": {
+    "cases": 13,
+    "skipped": 0,
+    "task_success": 1.0,
+    "routing_accuracy": null,
+    "tool_selection_accuracy": 1.0,
+    "tool_args_accuracy": null,
+    "policy_accuracy": null,
+    "citation_rate": null,
+    "facts_rate": 1.0,
+    "retrieval_recall": null,
+    "approval_coverage": 1.0,
+    "approval_expectation_accuracy": 1.0,
+    "unexpected_writes": 0,
+    "trace_coverage": 1.0,
+    "unauthorized_actions": 0,
+    "secret_leaks": 0,
+    "security_pass_rate": null,
+    "by_category": {
+      "knowledge": null,
+      "service_desk": null,
+      "access": null,
+      "multi_intent": null,
+      "security": null,
+      "failure": 1.0
+    },
+    "latency_p50_s": 0.0273,
+    "latency_p95_s": 0.8248,
+    "llm_latency_mean_s": 0.1508,
+    "tool_latency_mean_s": 0.0013,
+    "retrieval_latency_mean_s": 0.0001,
+    "llm_calls_mean": 3.15,
+    "tool_calls_mean": 1.38,
+    "input_tokens_total": 6260,
+    "output_tokens_total": 657,
+    "cost_total_usd": 0.0,
+    "cost_per_request_usd": 0.0,
+    "cost_per_success_usd": 0.0,
+    "pricing_as_of": "2026-09-25"
+  },
+  "judge": null,
+  "cases": [
+    {
+      "id": "rel-01",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 1,
+      "tool_calls": 0,
+      "latency_s": 1.0744
+    },
+    {
+      "id": "rel-02",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 2,
+      "tool_calls": 0,
+      "latency_s": 0.8248
+    },
+    {
+      "id": "rel-03",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 1,
+      "tool_calls": 0,
+      "latency_s": 0.0091
+    },
+    {
+      "id": "rel-04",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 7,
+      "tool_calls": 6,
+      "latency_s": 0.0273
+    },
+    {
+      "id": "rel-05",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 3,
+      "tool_calls": 1,
+      "latency_s": 0.0266
+    },
+    {
+      "id": "rel-06",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 3,
+      "tool_calls": 1,
+      "latency_s": 0.0272
+    },
+    {
+      "id": "rel-07",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "latency_s": 0.0
+    },
+    {
+      "id": "rel-08",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 3,
+      "tool_calls": 2,
+      "latency_s": 0.021
+    },
+    {
+      "id": "rel-09",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 3,
+      "tool_calls": 1,
+      "latency_s": 0.0208
+    },
+    {
+      "id": "rel-10",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 3,
+      "tool_calls": 1,
+      "latency_s": 0.031
+    },
+    {
+      "id": "rel-11",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 3,
+      "tool_calls": 1,
+      "latency_s": 0.0303
+    },
+    {
+      "id": "rel-12",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 3,
+      "tool_calls": 2,
+      "latency_s": 0.0389
+    },
+    {
+      "id": "rel-13",
+      "category": "failure",
+      "success": true,
+      "failed": [],
+      "llm_calls": 9,
+      "tool_calls": 3,
+      "latency_s": 0.0767
+    }
+  ],
+  "skipped": []
+}

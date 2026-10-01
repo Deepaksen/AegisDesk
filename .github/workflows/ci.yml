@@ -47,10 +47,15 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check
-        run: uv run mypy src tests
+        run: uv run mypy src tests apps
 
-      - name: Database migrations
-        run: uv run alembic upgrade head
+      # Milestone 10: the compose stack must stay valid (services, anchors, variables).
+      - name: Compose file
+        run: docker compose config --quiet
+
+      # Alembic migrations + LangGraph checkpoint tables + seed rows (idempotent).
+      - name: Database setup
+        run: uv run aegisdesk db init
 
       # Live provider tests need credentials or a running Ollama; they are run by hand.
       - name: Tests (unit, integration incl. pgvector, security)
@@ -58,3 +63,23 @@ jobs:
 
       - name: RAG retrieval evaluation gate
         run: uv run aegisdesk eval rag --min-hit-rate 0.85
+
+      # Milestone 9: golden + adversarial suites on the offline model. Safety gates
+      # (0 unauthorized actions, approval enforced, 100% traced, no secrets) and
+      # regression against the committed baselines. Quality targets need a real model.
+      - name: Golden evaluation (safety + regression gates)
+        run: |
+          uv run aegisdesk eval golden --config multi --baseline evals/regression/golden_v1-multi-fake-scripted.json
+          uv run aegisdesk eval golden --config multi_mcp --baseline evals/regression/golden_v1-multi_mcp-fake-scripted.json
+
+      - name: Adversarial evaluation (safety + regression gates)
+        run: |
+          uv run aegisdesk eval golden --dataset evals/adversarial/security_v1.yaml --config multi --baseline evals/regression/adversarial_v1-multi-fake-scripted.json
+          uv run aegisdesk eval golden --dataset evals/adversarial/security_v1.yaml --config multi_mcp --baseline evals/regression/adversarial_v1-multi_mcp-fake-scripted.json
+
+      # Milestone 11: every spec failure (model timeout/outage, malformed output, database
+      # errors, MCP timeout/outage, tool failure, duplicates) must degrade safely.
+      - name: Reliability evaluation (safety + regression gates)
+        run: |
+          uv run aegisdesk eval golden --dataset evals/reliability/faults_v1.yaml --config multi --baseline evals/regression/reliability_v1-multi-fake-scripted.json
+          uv run aegisdesk eval golden --dataset evals/reliability/faults_v1.yaml --config multi_mcp --baseline evals/regression/reliability_v1-multi_mcp-fake-scripted.json

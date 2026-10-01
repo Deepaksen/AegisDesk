@@ -1,0 +1,19 @@
+flowchart TB
+  prop["Agent proposes a write"] --> gw["Policy gateway allows it"]
+  gw --> snap["Pre-action protection<br/><small>Rubrik snapshot or change record<br/>for protected systems</small>"]
+  snap --> act["Action runs · audited"]
+  act --> det["Problem found<br/><small>user report · monitor · risk index</small>"]
+  det --> dec{"Undo approved?<br/><small>undo is also an action</small>"}
+  dec -- "domain undo exists" --> comp["Compensating action<br/><small>revoke access · cancel request</small>"]
+  dec -- "data damaged broadly" --> rew["Rubrik Agent Rewind<br/><small>restore the pre-action state</small>"]
+  comp --> aud["Audited · verified"]
+  rew --> aud
+  class prop,gw,act,comp,aud core
+  class snap,rew vendor
+  class det risk
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

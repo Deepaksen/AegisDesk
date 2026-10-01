@@ -1,0 +1,18 @@
+flowchart TB
+  rt["Zscaler AI red teaming<br/><small>before every release · thousands of<br/>attack scenarios against staging</small>"] --> cmp["Compare with the last release<br/><small>behavioural regression</small>"]
+  cmp --> gate{"Worse than<br/>baseline?"}
+  gate -- yes --> block["Block the release"]
+  gate -- no --> ship["Release continues"]
+  cmp -- findings --> pol["Guardrail policies<br/><small>generated from findings</small>"]
+  pol --> guard["Zscaler AI Guard in production<br/><small>prompt injection · data loss · toxic content</small>"]
+  guard --- zt["Zero trust access<br/><small>which AI services may be reached</small>"]
+  guard -. "new attack patterns" .-> rt
+  class rt,cmp,pol,guard,zt vendor
+  class block risk
+  class ship core
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

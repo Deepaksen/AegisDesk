@@ -1,0 +1,42 @@
+flowchart TB
+  users["Employees · channels · partner agents"] --> gtm["Global traffic manager<br/><small>DNS / GSLB · health-based routing</small>"]
+  subgraph GCP["Google Cloud"]
+    direction TB
+    gapi["Apigee runtime"] --> gke["GKE<br/><small>AegisDesk API · agents<br/>workflow workers</small>"]
+    gke --> gdb[("Cloud SQL / AlloyDB<br/>+ pgvector")]
+    gdb ~~~ gm["Gemini Enterprise<br/>Agent Platform<br/><small>models · sessions · memory</small>"]
+    gke --> gm
+  end
+  subgraph AWS["AWS"]
+    direction TB
+    aapi["Apigee hybrid runtime"] --> eks["EKS<br/><small>AegisDesk API · agents<br/>workflow workers</small>"]
+    eks --> adb[("Aurora PostgreSQL<br/>+ pgvector")]
+    adb ~~~ am["Bedrock · AgentCore<br/><small>models · sessions · memory</small>"]
+    eks --> am
+  end
+  subgraph AZ["Azure"]
+    direction TB
+    zapi["Apigee hybrid runtime"] --> aks["AKS<br/><small>AegisDesk API · agents<br/>workflow workers</small>"]
+    aks --> zdb[("Azure Database for<br/>PostgreSQL + pgvector")]
+    zdb ~~~ zm["Microsoft Foundry<br/><small>models · threads · memory</small>"]
+    aks --> zm
+  end
+  gtm --> gapi
+  gtm --> aapi
+  gtm --> zapi
+  subgraph SH["Shared SaaS · multi-region"]
+    direction LR
+    tc["Temporal Cloud"] ~~~ ar["Arize AX"] ~~~ ly["Lyzr"] ~~~ ok["Okta"] ~~~ cr["Credo AI"]
+  end
+  gm ~~~ SH
+  am ~~~ SH
+  zm ~~~ SH
+  class gke,eks,aks core
+  class gapi,aapi,zapi,tc,ar,ly,ok,cr vendor
+  class gm,am,zm cloud
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

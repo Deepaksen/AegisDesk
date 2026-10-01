@@ -1,0 +1,22 @@
+flowchart LR
+  subgraph IN["Sources"]
+    direction LR
+    s1["System prompt<br/><small>name and version from the registry</small>"]
+    s2["User context<br/><small>identity · role · entitlements</small>"]
+    s3["Memories<br/><small>this user only · marked as data</small>"]
+    s4["Retrieved documents<br/><small>access-filtered RAG · citations</small>"]
+    s5["Conversation window<br/><small>recent turns + summary</small>"]
+    s6["Tool schemas<br/><small>this agent's allowlist only</small>"]
+  end
+  IN --> asm["Context assembler<br/><small>token budget · ordering<br/>provenance tags</small>"]
+  asm --> guard["Guardrail check<br/><small>Zscaler AI Guard</small>"]
+  guard --> model["Model call"]
+  class s1,s2,s3,s4,s5,s6,asm core
+  class guard vendor
+  class model cloud
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

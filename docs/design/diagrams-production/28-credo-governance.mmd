@@ -1,0 +1,15 @@
+flowchart TB
+  intent["Policy intent in Credo AI<br/><small>EU AI Act · NIST AI RMF · ISO/IEC 42001 packs</small>"] --> ctrl["Controls required for this use case<br/><small>e.g. human approval for high-risk actions</small>"]
+  ctrl --> code["Implemented as code<br/><small>policy.yaml · Apigee policies · AI Guard rules</small>"]
+  code --> evid["Evidence collected automatically<br/><small>eval reports · red-team results · Arize metrics · audit samples</small>"]
+  evid --> att["Review and attestation<br/><small>governance workflow</small>"]
+  att --> gate["Release gate reads the status"]
+  att --> risk["AI risk register updated"]
+  class intent,ctrl,att,risk vendor
+  class code,evid,gate core
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

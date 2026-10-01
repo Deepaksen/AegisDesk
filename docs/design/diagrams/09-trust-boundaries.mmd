@@ -1,0 +1,13 @@
+flowchart TB
+  subgraph untrusted["Untrusted content"]
+    direction LR
+    txt["User text"] ~~~ doc["Retrieved documents"] ~~~ mo["Model output<br/><small>tool calls, arguments, answers</small>"]
+  end
+  subgraph trusted["Trusted code"]
+    hdr["Gateway header X-Employee-Id"] --> auth["authenticate()<br/><small>exists &amp; active in directory</small>"]
+    auth --> uc["UserContext<br/><small>employee_id · roles · department · manager</small>"]
+    uc --> exe["Executor + gateway<br/><small>identity injected by code, never an argument</small>"]
+    exe --> tok["Delegation token (JWT)<br/><small>sub=user · act=agent · aud=server · request_id · short TTL</small>"]
+    tok --> srv["MCP server<br/><small>verifies token, re-applies policy</small>"]
+  end
+  mo -->|"proposes tool + args<br/>(schema has no identity fields)"| exe

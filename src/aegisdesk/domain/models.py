@@ -85,3 +85,11 @@ class Ticket(BaseModel):
     priority: TicketPriority
     status: TicketStatus
     created_at: datetime
+
+
+class TicketComment(BaseModel):
+    comment_id: str
+    ticket_id: str
+    author_id: str
+    body: str
+    created_at: datetime

@@ -186,8 +186,10 @@ def _best_matching_tool(tools: list[dict[str, Any]], user_text: str) -> dict[str
 def _fill_schema(schema: dict[str, Any], defs: dict[str, Any], user_text: str) -> dict[str, Any]:
     """Deterministically produce arguments matching a JSON schema object.
 
-    Fields with a default use it. Enums pick the first value mentioned in the
-    user's text (else the first value). Strings with a `pattern` take the first
+    Fields with a default use it. Enums pick the option whose description
+    (written as "option: words; ...") best matches the text, else the first
+    value mentioned in the text, else the first value. Lists of objects get
+    one filled-in item. Strings with a `pattern` take the first
     match in the text; other strings take the text's first paragraph. Lists of
     pattern-constrained strings take every match. Booleans are False and
     numbers take their minimum (or 0).
@@ -200,7 +202,10 @@ def _fill_schema(schema: dict[str, Any], defs: dict[str, Any], user_text: str) -
             args[name] = prop.get("default", resolved.get("default"))
         elif "enum" in resolved:
             options = [str(v) for v in resolved["enum"]]
-            args[name] = next((o for o in options if o.lower() in lowered), options[0])
+            description = prop.get("description") or resolved.get("description") or ""
+            args[name] = _choose_option(options, description, user_text) or next(
+                (o for o in options if o.lower() in lowered), options[0]
+            )
         elif resolved.get("type") == "boolean":
             args[name] = False
         elif resolved.get("type") in ("integer", "number"):
@@ -208,7 +213,12 @@ def _fill_schema(schema: dict[str, Any], defs: dict[str, Any], user_text: str) -
         elif resolved.get("type") == "array":
             # A list of pattern-constrained strings (e.g. citation IDs) gets every
             # distinct match in the text; any other list is empty.
-            item_pattern = _resolve(resolved.get("items", {}), defs).get("pattern")
+            # A list of objects gets one filled-in item.
+            items = _resolve(resolved.get("items", {}), defs)
+            if items.get("type") == "object" or "properties" in items:
+                args[name] = [_fill_schema(items, defs, user_text)]
+                continue
+            item_pattern = items.get("pattern")
             matches = re.findall(item_pattern.strip("^$"), user_text) if item_pattern else []
             args[name] = list(dict.fromkeys(matches))
         elif "pattern" in resolved:
@@ -219,6 +229,19 @@ def _fill_schema(schema: dict[str, Any], defs: dict[str, Any], user_text: str) -
             first_paragraph = user_text.split("\n\n", 1)[0]
             args[name] = first_paragraph[: resolved.get("maxLength", 200)]
     return args
+
+
+def _choose_option(options: list[str], description: str, user_text: str) -> str | None:
+    """Pick the enum option whose description ("option: words; other: words") best matches."""
+    wanted = _stems(user_text)
+    best, best_score = None, 0
+    for option in options:
+        match = re.search(rf"\b{re.escape(option)}:\s*(.*?)(?=;\s*\w+:|$)", description, re.S)
+        if match:
+            score = len(wanted & _stems(match.group(1)))
+            if score > best_score:
+                best, best_score = option, score
+    return best
 
 
 def _resolve(prop: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:

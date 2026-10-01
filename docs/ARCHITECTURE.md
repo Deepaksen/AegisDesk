@@ -1,6 +1,6 @@
 # AegisDesk architecture
 
-This document describes the **target** architecture and marks what has been built so far. It is updated at every milestone.
+This document describes the **target** architecture and marks what has been built so far. It is updated at every milestone. For a consolidated, diagram-rich design document, see the [High-Level Design (Word)](AegisDesk-High-Level-Design.docx) and its [diagram sources](design/). The next stage (productionisation, multi-cloud, enterprise integrations and the GenX platform) is designed, not built, in the [Productionisation and GenX Platform Design (Word)](AegisDesk-Productionisation-and-GenX-Platform-Design.docx).
 
 | Milestone | Status |
 |---|---|
@@ -8,15 +8,15 @@ This document describes the **target** architecture and marks what has been buil
 | M1 Single agent + local tools | ✅ built ([notes](milestones/M1-single-agent-tools.md)) |
 | M2 LangGraph | ✅ built ([notes](milestones/M2-langgraph.md)) |
 | M3 RAG | ✅ built ([notes](milestones/M3-rag.md), [design](RAG_DESIGN.md)) |
-| M4 Multi-agent | not started |
-| M5 MCP | not started |
-| M6 Governance | not started |
-| M7 Human approval | not started |
-| M8 Observability | not started |
-| M9 Evaluations | not started |
-| M10 API + UI | not started |
-| M11 Reliability | not started |
-| M12 CI/CD | partial: lint, type and unit-test gates run in CI from M0 |
+| M4 Multi-agent | ✅ built ([notes](milestones/M4-multi-agent.md), [design](AGENT_DESIGN.md)) |
+| M5 MCP | ✅ built ([notes](milestones/M5-mcp.md), [design](MCP_DESIGN.md)) |
+| M6 Governance | ✅ built ([notes](milestones/M6-governance.md), [design](GOVERNANCE_DESIGN.md)) |
+| M7 Human approval | ✅ built ([notes](milestones/M7-approvals.md), [design](APPROVALS_DESIGN.md)) |
+| M8 Observability | ✅ built ([notes](milestones/M8-observability.md), [design](OBSERVABILITY.md)) |
+| M9 Evaluations | ✅ built ([notes](milestones/M9-evaluations.md), [design](EVALUATION.md)) |
+| M10 API + UI | ✅ built ([notes](milestones/M10-api-ui.md), [API](API.md), [runbook](RUNBOOK.md)) |
+| M11 Reliability | ✅ built ([notes](milestones/M11-reliability.md), [ADR 0017](adr/0017-resilience-degrade-safely.md)) |
+| M12 CI/CD | partial: lint, type and test gates from M0; RAG gate from M3; golden and adversarial safety + regression gates from M9; compose validation from M10; reliability suite gates from M11 |
 
 ## Guiding principle
 
@@ -57,7 +57,142 @@ AI reasoning   ──proposes──►   Business workflow   ──guarded by─
  Cross-cutting: model layer (M0) · audit events · OpenTelemetry + LangSmith · evals
 ```
 
-## What exists after M3
+## What exists after M11
+
+### Reliability
+
+```
+model call ──► ModelGuard: classify ─► retry (backoff+jitter) ─► breaker ──► safe answer + stop_reason=model_error ─► API 503 Retry-After
+tool call  ──► MCP: read retry once, never write retry ─► breaker per server ─► "unavailable" to the model
+store call ──► GuardedAccessStore / checkpoint / idempotency ─► StoreUnavailableError ─► tool "unavailable" | API 503
+approval   ──► write-ahead audit (refuse if not recorded) ─► decide ─► resume ─► provision ──(failed)──► reconcile
+request    ──► Idempotency-Key ─► new | replay stored response | 409 in flight | 422 reused
+```
+
+* **Reliability** (`src/aegisdesk/reliability/`, `persistence/idempotency.py`): every spec failure is classified at its seam and degrades to a safe, explained result; nothing is written without an audit record, and nothing is retried that is not safe to retry. Fault injection (`AEGIS_FAULTS`) covers all of them, and the reliability evaluation suite gates them in CI. See [M11](milestones/M11-reliability.md), [ADR 0017](adr/0017-resilience-degrade-safely.md).
+
+From M10:
+
+### API, UI and deployment
+
+```
+ Browser ─► Streamlit UI (:8501) ─HTTP─► FastAPI (:8000)  X-Employee-Id ◄─ authenticating gateway
+                ApiClient only            │ /api/v1: threads, messages (JSON | SSE), approvals, audit, me
+                                          │ /health /ready /metrics /docs      problem+json errors
+                                          ▼
+                                   AegisRuntime (one per process; also used by the CLI)
+                                          │
+        supervisor graph ─► gateway + policy ─► MCP servers (:8765, internal) ─┐
+               │ checkpoints, audit, access data, pgvector                      │
+               └──────────────────────────► PostgreSQL ◄───────────────────────┘
+ docker compose up: postgres → migrate → mcp → api → ui   (+ --profile observability)
+```
+
+* **API** (`src/aegisdesk/api/`): a thin FastAPI adapter over `AegisRuntime` (`src/aegisdesk/runtime.py`). Identity comes only from the gateway header, validated against the directory; bodies cannot carry it. Streaming is SSE with code-built activity summaries (no chain-of-thought). Idempotency keys map to request IDs. See [API.md](API.md), [ADR 0015](adr/0015-fastapi-thin-adapter-trusted-header.md).
+* **UI** (`apps/ui/`): Streamlit, a pure HTTP client with employee, manager and audit views. See [ADR 0016](adr/0016-streamlit-initially.md).
+* **Deployment** (`Dockerfile`, `docker-compose.yml`): one image; MCP servers on the internal network sharing the PostgreSQL stores. See [RUNBOOK.md](RUNBOOK.md).
+
+From M9:
+
+### Evaluation lifecycle
+
+```
+datasets (golden 60, adversarial 8, versioned YAML)
+   └─► EvalRunner × system version (multi | multi_mcp | single) × model
+          fresh seeded world per case · scripted model for attacks · approvals + resume
+          captures: trajectory · audit events · spans · JSON logs · data before/after
+   └─► checks in code (routing, tools, args, policy, approval, facts, citations,
+          effects, unauthorized, approval enforced, limits, traced, secrets)  [+ opt-in LLM judge]
+   └─► report (quality, safety, latency, tokens, cost) ─► gates: safety (CI) · quality · regression (CI)
+```
+
+* **Evaluation** (`src/aegisdesk/evals/`, `evals/`): the golden dataset and adversarial suite run through the real system; deterministic, RAG and trajectory checks; performance and cost; version comparison; safety and regression gates in CI; optional LLM judge. The adversarial suite found a real gap, closed by a per-request write budget in the policy. See [EVALUATION.md](EVALUATION.md) and [ADR 0014](adr/0014-deterministic-first-evaluation.md).
+
+From M8:
+
+### Observability
+
+```
+spans · metrics · JSON logs ──(RedactingSpanProcessor)──► OTLP ─► Collector ─┬─► Tempo ──┐
+     one trace per request, across MCP (traceparent in _meta)               └─► Prometheus┴─► Grafana
+     trace_id also in audit_events                         optional: LangSmith (redacted)
+```
+
+* **Observability** (`src/aegisdesk/observability/`, `infra/observability/`): OpenTelemetry spans at every seam (request, router/model calls, specialists, tools, policy, MCP client and server, retrieval, approvals) with GenAI semantic-convention attributes; the §24 metrics; JSON logs with trace context; optional LangSmith; allowlist redaction; injected faults for debugging practice. See [OBSERVABILITY.md](OBSERVABILITY.md) and [ADR 0013](adr/0013-opentelemetry-langsmith-redaction.md).
+
+From M7:
+
+### Approval workflow
+
+```
+access agent ─► create_access_request ─► request + approval steps (store)
+respond ─► await_approval ─► INTERRUPT (checkpoint)  ···  manager: approvals approve AP-… (checks, audit)
+                ▲    │                                              │ resume(thread)
+     still waiting    └─ all decided (store) ─► apply_approvals ◄───┘
+                                                 provision_access as access_workflow
+                                                 (HIGH: gateway requires store-found approval evidence)
+```
+
+* **Approvals** (`src/aegisdesk/approvals/`, `domain/access_store*.py`, migration 0003): steps created with the request; decisions by the named manager or role holder, with separation of duties, expiry and idempotency; the resumed workflow provisions through the gateway. Durable with `DATA_STORE=postgres` and `CHECKPOINT_STORE=postgres`. See [APPROVALS_DESIGN.md](APPROVALS_DESIGN.md), [ADR 0011](adr/0011-approval-interrupt-resume.md) and [ADR 0012](adr/0012-postgres-for-workflow-state.md).
+
+From M6:
+
+### Governance: every tool call
+
+```
+tool request ─► allowlist ─► schema ─► ACTION GATEWAY ────────────────► handler ─► audit outcome
+                                        policy(agent, user, tool, env)
+                                        audit decision (before anything runs)
+                                        DENY → policy_denied · HIGH → approval_required (M7)
+```
+
+* **Policy** (`config/policy.yaml`, `src/aegisdesk/governance/`): risk classes, per-agent grants, authorized writes, forbidden actions, environment rules. Deterministic engine, fail closed, all deny reasons reported. See [GOVERNANCE_DESIGN.md](GOVERNANCE_DESIGN.md) and [ADR 0009](adr/0009-deterministic-policy-engine.md).
+* **Enforcement points:** the host's `ToolExecutor` for local tools, and the MCP servers for enterprise tools, using the agent from the verified token.
+* **Audit** (`src/aegisdesk/audit/`, migration 0002): decision + outcome events per call. In PostgreSQL, triggers reject UPDATE, DELETE and TRUNCATE. See [ADR 0010](adr/0010-append-only-audit-store.md).
+
+From M5:
+
+### MCP interactions
+
+```
+ Host process (CLI)                                         MCP servers (in-process or `aegisdesk mcp serve`)
+ ─────────────────                                          ────────────────────────────────────────────────
+ specialist agent ── ToolRunner ──┬─ local ToolExecutor     knowledge search/retrieve, request_handoff
+   (AgentIdentity)                │
+                                  ├─ RemoteToolRunner ─ tools/call + _meta{JWT aud=read}   ─► aegisdesk-read
+                                  │    allowlist · token per call · timeout · 1 retry          verify token → ToolExecutor
+                                  └─ RemoteToolRunner ─ tools/call + _meta{JWT aud=action} ─► aegisdesk-action
+                                       allowlist · token per call · timeout · no retry         verify token → ToolExecutor
+```
+
+* **MCP** (`src/aegisdesk/mcp_servers/`, `tools/remote.py`, `tools/transport.py`, `identity/tokens.py`): enterprise tools behind a read server and an action server. Each call carries a short-lived signed delegation token (user claims, RFC 8693 `act` agent claim, request ID, server audience). Servers trust only the token. `TOOL_TRANSPORT` chooses `local`, `mcp_inprocess` or `mcp_http`; agents do not change. See [MCP_DESIGN.md](MCP_DESIGN.md) and [ADR 0008](adr/0008-mcp-servers-with-delegation-tokens.md).
+
+From M4:
+
+### Multi-agent topology (default engine)
+
+```
+aegisdesk agent --as E1004 --thread T "..."
+   │  authenticate() → UserContext · thread ownership check · SQLite checkpointer (visible turns only)
+   ▼
+start_turn → classify_request ──(LLM: RoutingPlan{tasks, out_of_scope})──► supervisor (code, no tools)
+                                                               Command(goto) │  ▲
+          ┌─────────────────────────┬────────────────────────────┬──────────┘  │ back after each task
+          ▼                         ▼                            ▼             │
+   knowledge subgraph        service_desk subgraph         access subgraph ────┘
+   search, retrieve_doc,     assets, tickets,              profile, my access, application,
+   handoff                   create_ticket, search,        eligibility, create_access_request,
+   + citation check (code)   handoff                       handoff (eligibility recomputed)
+          │                         │                            │
+          └──── each: its own prompt, its own ToolRunner, its own state ───────┘
+                                   │
+                              respond (1 answer → as is; several → sections joined by code)
+```
+
+* **Agents** (`src/aegisdesk/agents/supervisor.py`, `graphs/supervisor_graph.py`): see [AGENT_DESIGN.md](AGENT_DESIGN.md) and [ADR 0007](adr/0007-specialised-agents-deterministic-supervisor.md). Tool sets are fixed per agent. Handoffs are requests to the supervisor, bounded by a budget. Specialist context is isolated.
+* **Access domain** (`domain/access.py`, `tools/access.py`): deterministic eligibility; requests are recorded as `awaiting_approval` or `auto_approved`, and never granted by an agent.
+
+### Single-agent engine (M2/M3, kept for comparison: `--engine graph`)
 
 ```
 aegisdesk agent --as E1004 --thread T "..."
@@ -92,7 +227,7 @@ query:   question + UserContext ─► embed ─► search top-k WHERE access ru
 ```
 
 * **RAG** (`src/aegisdesk/rag/`): details in [RAG_DESIGN.md](RAG_DESIGN.md); decisions in [ADR 0005](adr/0005-postgresql-pgvector.md) (PostgreSQL + pgvector) and [ADR 0006](adr/0006-embeddings.md) (embeddings). Access control is enforced inside the vector query, before ranking. Retrieved text is untrusted data; the M1 tool boundary still decides what can happen.
-* **Evaluation** (`evals/datasets/`, `src/aegisdesk/evals/`): deterministic retrieval metrics with a CI gate (0 access violations, hit rate ≥ 0.85).
+* **Retrieval evaluation** (`evals/datasets/rag_retrieval_v1.yaml`): deterministic retrieval metrics with a CI gate (0 access violations, hit rate ≥ 0.85).
 
 ### LangGraph topology
 
@@ -134,20 +269,20 @@ The spec's layout (§36) is followed inside a single installable package, `src/a
 | `tools/` | `src/aegisdesk/tools/` | M1 |
 | `identity/` | `src/aegisdesk/identity/` (simulated login; OIDC later) | M1 |
 | `data/seed/` | `data/seed/` | M1 |
-| `graphs/`, `agents/` | `src/aegisdesk/graphs/`, `src/aegisdesk/agents/` | M1–M2 (M4 adds more agents) |
+| `graphs/`, `agents/` | `src/aegisdesk/graphs/`, `src/aegisdesk/agents/` | M1–M2; supervisor + specialists M4 |
 | `rag/` | `src/aegisdesk/rag/`; documents in `data/documents/` | M3 |
-| `mcp_servers/` | `src/aegisdesk/mcp_servers/` | M5 |
-| `governance/` | `src/aegisdesk/governance/` | M6 |
+| `mcp_servers/` | `src/aegisdesk/mcp_servers/`; client side in `src/aegisdesk/tools/remote.py` | M5 |
+| `governance/` | `src/aegisdesk/governance/` (policy data in `config/policy.yaml`); audit in `src/aegisdesk/audit/` | M6 |
 | `persistence/` | `src/aegisdesk/persistence/` (checkpointer) | M2 |
 | `migrations/` | `migrations/` (Alembic), `alembic.ini` | M3 |
-| `approvals/` | … | M7 |
-| `observability/`, `infrastructure/` | … | M8 |
-| `evals/` | `evals/datasets/` (data), `src/aegisdesk/evals/` (evaluators) | M3 (retrieval); M9 (full suite) |
-| `apps/api`, `apps/ui` | … | M10 |
+| `approvals/` | `src/aegisdesk/approvals/` | M7 |
+| `observability/`, `infrastructure/` | `src/aegisdesk/observability/`, `infra/observability/` (+ Grafana dashboards) | M8 |
+| `evals/` | `evals/datasets/`, `evals/adversarial/`, `evals/regression/` (baselines); `src/aegisdesk/evals/` (runner, evaluators, judge) | M3 (retrieval); M9 (full suite) |
+| `apps/api`, `apps/ui` | `src/aegisdesk/api/` (installable, imported by tests and the CLI), `apps/ui/streamlit_app.py` (+ `src/aegisdesk/ui/client.py`); `Dockerfile`, `docker-compose.yml` | M10 |
 
 ## Diagrams still to come
 
-Written as each milestone lands: MCP interactions (M5), the full security boundary (M6; its first version is described above), approval workflow (M7), observability architecture (M8), evaluation lifecycle (M9).
+Written as each milestone lands: workflow (M7), observability architecture (M8), evaluation lifecycle (M9), API/UI and deployment (M10), reliability (M11); release pipeline (M12) next.
 
 ## Decisions
 

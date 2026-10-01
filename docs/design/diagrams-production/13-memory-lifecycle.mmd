@@ -1,0 +1,19 @@
+flowchart TB
+  ev["Conversation events<br/><small>in the cloud serving the user</small>"] --> nat["Native memory service<br/><small>extract · consolidate</small>"]
+  nat --> mir["Memory adapter<br/><small>filter by policy · tag provenance</small>"]
+  mir --> canon[("Canonical memory record<br/>platform-owned, per user")]
+  canon --> hyd["Re-hydrate another cloud<br/><small>lazily, on first use there</small>"]
+  nat --> ret["Retrieve at turn time<br/><small>top-k · this user only · labelled as data</small>"]
+  hyd --> ret
+  del["Deletion<br/><small>user request · retention · incident</small>"] --> canon
+  canon -. "tombstone" .-> nat
+  canon -. "tombstone" .-> hyd
+  class ev,mir,canon,hyd,ret core
+  class nat cloud
+  class del risk
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

@@ -1,0 +1,11 @@
+flowchart TB
+  ds[("Datasets (versioned YAML)<br/><small>golden 60 · adversarial 8 · reliability 13 · RAG 24</small>")] --> run
+  cfg["System version × model<br/><small>multi · multi_mcp · single</small>"] --> run
+  run["EvalRunner<br/><small>fresh seeded world per case · scripted attacks ·<br/>faults · repeats · approvals + resume</small>"] --> cr["CaseRun<br/><small>trajectory · audit · spans · logs · data diff</small>"]
+  cr --> chk["Deterministic checks<br/><small>routing · tools · policy · approval · facts · citations ·<br/>effects · unauthorized · traced · secrets</small>"]
+  cr -.-> jd["LLM judge (opt-in)"]
+  chk --> rep["Report<br/><small>quality · safety · latency · tokens · cost</small>"]
+  jd -.-> rep
+  rep --> sg{"Safety gate<br/><small>CI</small>"}
+  rep --> rg{"Regression gate<br/><small>CI</small>"}
+  rep --> qg{"Quality gate<br/><small>real model</small>"}

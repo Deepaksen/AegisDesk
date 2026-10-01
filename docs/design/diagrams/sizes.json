@@ -1,0 +1,82 @@
+{
+  "01-system-context": {
+    "width": 839,
+    "height": 972
+  },
+  "02-conceptual-layers": {
+    "width": 846,
+    "height": 974
+  },
+  "03-container-view": {
+    "width": 1023,
+    "height": 1345
+  },
+  "04-package-dependencies": {
+    "width": 1123,
+    "height": 1029
+  },
+  "05-supervisor-graph": {
+    "width": 886,
+    "height": 1176
+  },
+  "06-tool-agent-graph": {
+    "width": 398,
+    "height": 795
+  },
+  "07-request-sequence": {
+    "width": 1372,
+    "height": 1093
+  },
+  "08-rag-pipeline": {
+    "width": 683,
+    "height": 1434
+  },
+  "09-trust-boundaries": {
+    "width": 756,
+    "height": 927
+  },
+  "10-approval-sequence": {
+    "width": 1194,
+    "height": 974
+  },
+  "11-state-machines": {
+    "width": 860,
+    "height": 1174
+  },
+  "12-ticket-idempotency": {
+    "width": 827,
+    "height": 1175
+  },
+  "13-defence-in-depth": {
+    "width": 460,
+    "height": 1322
+  },
+  "14-policy-decision": {
+    "width": 634,
+    "height": 1076
+  },
+  "15-observability-pipeline": {
+    "width": 1100,
+    "height": 671
+  },
+  "16-evaluation-lifecycle": {
+    "width": 601,
+    "height": 1064
+  },
+  "17-model-guard": {
+    "width": 984,
+    "height": 1039
+  },
+  "18-deployment": {
+    "width": 560,
+    "height": 1012
+  },
+  "19-data-model": {
+    "width": 1784,
+    "height": 732
+  },
+  "20-circuit-breaker": {
+    "width": 1063,
+    "height": 394
+  }
+}

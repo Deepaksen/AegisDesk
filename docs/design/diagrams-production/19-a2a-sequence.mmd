@@ -1,0 +1,16 @@
+sequenceDiagram
+  autonumber
+  participant HR as HR onboarding agent
+  participant ID as Okta / Entra
+  participant GW as Apigee agent gateway
+  participant AD as AegisDesk A2A server
+  HR->>GW: GET /.well-known/agent-card.json
+  GW-->>HR: Agent Card (skills, auth schemes, signature)
+  HR->>ID: Token exchange (user + acting agent)
+  ID-->>HR: Token: sub = employee, act = HR agent
+  HR->>GW: Send message "laptop and VPN for new joiner E1042"
+  GW->>AD: Forward (token verified, quota ok)
+  AD-->>HR: Task state: working (streamed)
+  AD-->>HR: Task state: input-required ("which cost centre?")
+  HR->>AD: Send message on the same task: "CC-410"
+  AD-->>HR: Task completed · artifacts INC-2041, AR-1102

@@ -1,0 +1,41 @@
+flowchart TB
+  subgraph EXP["Experience"]
+    direction LR
+    ch1["Web UI"] ~~~ ch2["Teams · M365"] ~~~ ch3["Gemini Enterprise"] ~~~ ch4["Other agents · A2A"]
+  end
+  subgraph EDGE["Edge and gateways"]
+    direction LR
+    zs["Zscaler<br/><small>secure access · AI Guard</small>"] ~~~ ag["Apigee<br/><small>agent gateway</small>"] ~~~ mg["Apigee<br/><small>MCP gateway</small>"]
+  end
+  subgraph RUN["Agent runtime · per cloud"]
+    direction LR
+    core["AegisDesk agents<br/><small>LangGraph · policy gateway</small>"] ~~~ ctx["Context services<br/><small>Foundry · AgentCore · Gemini</small>"] ~~~ tmp["Temporal<br/><small>durable workflows</small>"]
+  end
+  subgraph TRUST["Trust and governance"]
+    direction LR
+    idp["Okta · Entra<br/><small>identity</small>"] ~~~ ent["Veza · Astrix<br/><small>entitlements · NHI</small>"] ~~~ credo["Credo AI<br/><small>risk · guardrails</small>"] ~~~ rb["Rubrik<br/><small>rollback</small>"]
+  end
+  subgraph CTRL["Control plane"]
+    direction LR
+    lyzr["Lyzr<br/><small>registry · deployments</small>"] ~~~ hub["Apigee API hub<br/><small>MCP registry</small>"] ~~~ cicd["CI/CD<br/><small>pipeline · GitOps</small>"]
+  end
+  subgraph OPS["Operate and improve"]
+    direction LR
+    arize["Arize AX<br/><small>traces · evals · risk</small>"] ~~~ fin["Flexera · Apptio · Optiz<br/><small>FinOps</small>"] ~~~ zrt["Zscaler<br/><small>AI red teaming</small>"]
+  end
+  subgraph INF["Multi-cloud foundation"]
+    direction LR
+    gcp["Google Cloud"] ~~~ aws["AWS"] ~~~ az["Azure"]
+  end
+  EXP --> EDGE --> RUN --> TRUST
+  TRUST ~~~ CTRL ~~~ OPS ~~~ INF
+  class ch1,core,ch4 core
+  class ch2,ch3,zs,ag,mg,ctx,tmp,idp,ent,credo,rb,lyzr,hub,arize,fin,zrt vendor
+  class gcp,aws,az cloud
+  class cicd core
+  classDef core fill:#E8F0FB,stroke:#2F5597,color:#1F2937
+  classDef vendor fill:#FFF4E5,stroke:#C27C0E,color:#1F2937
+  classDef cloud fill:#EAF6EE,stroke:#2E7D32,color:#1F2937
+  classDef gov fill:#F3EEFA,stroke:#6A3FA0,color:#1F2937
+  classDef risk fill:#FDECEC,stroke:#B3261E,color:#1F2937
+  classDef muted fill:#F3F4F6,stroke:#6B7280,color:#1F2937

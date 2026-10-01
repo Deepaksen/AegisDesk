@@ -1,0 +1,8 @@
+flowchart TB
+  S((START)) --> st["start_turn<br/><small>reset counters</small>"]
+  st --> cm["call_model<br/><small>ModelGuard: retry · breaker</small>"]
+  cm -->|"tool calls<br/>(incl. malformed)"| rt["run_tools<br/><small>ToolRunner → gateway → tool</small>"]
+  cm -->|"final answer ·<br/>empty → fallback ·<br/>outage → safe answer"| E((END))
+  rt -->|"under limits"| cm
+  rt -->|"max steps /<br/>max tool calls"| lr["limit_reached<br/><small>fixed answer</small>"]
+  lr --> E

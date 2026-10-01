@@ -65,6 +65,8 @@ class ToolCallContext:
     request_id: str
     # Set by the executor for write tools; derived from the request and arguments.
     idempotency_key: str | None = None
+    # The conversation thread, when there is one (approval workflows resume it).
+    thread_id: str | None = None
 
 
 @dataclass(frozen=True)

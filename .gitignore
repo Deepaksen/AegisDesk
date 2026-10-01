@@ -25,3 +25,7 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+evals/results/
+# Documentation tooling (Node): sources are tracked, dependencies are not
+!docs/design/build/
+docs/design/build/node_modules/

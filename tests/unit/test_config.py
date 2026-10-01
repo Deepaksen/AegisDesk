@@ -56,3 +56,8 @@ def test_api_key_is_never_rendered(monkeypatch: pytest.MonkeyPatch) -> None:
     assert SECRET not in repr(settings)
     assert SECRET not in str(settings)
     assert SECRET not in settings.model_dump_json()
+
+
+def test_empty_mcp_token_secret_means_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_TOKEN_SECRET", "")
+    assert Settings().mcp_token_secret is None
